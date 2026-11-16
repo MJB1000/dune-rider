@@ -1,643 +1,665 @@
 // ============================================================================
-// renderer, camera and input
+// renderer, camera, controls, dust, HUD
 // ============================================================================
 const $ = (id) => document.getElementById(id);
-const canvas = $('c'), info = $('i'), body = document.body;
-// a phone held upright gets the page turned on its side (see template.html)
-const rot = matchMedia('(orientation:portrait) and (pointer:coarse)');
-// loading bar: each stage glides it to `to` (the share done) over ~`ms` on the compositor, so it moves while this
-// thread is busy
-let loaded = 0, dead; // dead: the graphics device was lost
-const say = (m, to, ms) => {
-  if (!dead) $('s').textContent = m;
-  const a = $('b').animate({ transform: [`scaleX(${loaded})`, `scaleX(${to})`] }, { duration: ms, fill: 'forwards', easing: 'cubic-bezier(.3,.5,.5,1)' });
-  loaded = to;
-  // go on once the animation runs: one not started before the thread gets busy stays stuck (timer: hidden tabs)
-  return new Promise((r) => { a.ready.then(() => setTimeout(r)); setTimeout(r, document.hidden ? 0 : 1e3); });
-};
-const fail = (m) => { throw new Error(m, { cause: 1 }); }; // cause marks a message that is shown as it is
-if (!navigator.gpu) fail('This scene needs WebGPU. Try a current Chrome or Edge.');
+const canvas = $('c'), elStatus = $('s'), elBar = $('b'), elHud = $('i'), elGo = $('d'), body = document.body;
+const fail = (msg) => { throw new Error(msg, { cause: 1 }); };
+if (!navigator.gpu) fail('This game needs WebGPU. Open it in a recent Chrome, Edge or Safari.');
 const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-if (!adapter) fail('No WebGPU adapter found.');
-$('w').hidden = !!navigator.userAgentData; // only Chromium-based browsers have it
-const hasTS = adapter.features.has('timestamp-query');
-const device = await adapter.requestDevice({ requiredFeatures: hasTS ? ['timestamp-query'] : [] });
-device.addEventListener('uncapturederror', (e) => console.error('GPU: ' + e.error.message));
-// out of memory or a GPU timeout: reload a level lower, or on Low say what happened
-device.lost.then((l) => {
-  if (l.reason === 'destroyed') return; // the page is closing
-  if (LV < 2) { keep('abyssal', LV + 1); location.reload(); }
-  dead = body.className = 'l e'; $('s').textContent = 'The graphics device was lost. Reload the page to try again.';
-});
+if (!adapter) fail('No WebGPU graphics adapter was found.');
+const device = await adapter.requestDevice();
+// the graphics driver gave up: come back a detail level lower, or on Low say what happened
+device.lost.then((l) => { if (l.reason === 'destroyed') return; if (LV < 2) { keep('dune', LV + 1); location.reload(); } else { body.className = 'l e'; elStatus.textContent = 'The graphics device was lost. Reload the page.'; } });
 const ctx = canvas.getContext('webgpu'), FMT = navigator.gpu.getPreferredCanvasFormat();
-const Q = device.queue, HDR = 'rgba16float', DEPTH = 'depth32float';
-const TU = GPUTextureUsage, BU = GPUBufferUsage, SS = GPUShaderStage;
+ctx.configure({ device, format: FMT, alphaMode: 'opaque' });
+// yields to the page between build steps; a message channel is not slowed down in a background tab the way timers are
+const _mc = new MessageChannel(); let _mcr = null; _mc.port1.onmessage = () => { const r = _mcr; _mcr = null; if (r) r(); };
+const tick = (f, msg) => { elBar.style.transform = `scaleX(${f})`; if (msg) elStatus.textContent = msg; return new Promise((r) => { _mcr = r; _mc.port2.postMessage(0); }); };
+const AA = 4, HDR = 'rgba16float', TU = GPUTextureUsage, BU = GPUBufferUsage, VIS = GPUShaderStage;
+device.pushErrorScope('validation');
 
-const mod = (code) => device.createShaderModule({ code });
-const buf = (data, usage) => { const b = device.createBuffer({ size: (data.byteLength + 3) & ~3, usage: usage | BU.COPY_DST }); Q.writeBuffer(b, 0, data.buffer || data, data.byteOffset || 0, data.byteLength); return b; };
-const tex = (w, h, format, usage, o = {}) => device.createTexture({ size: [w, h, o.d || 1], format, usage, mipLevelCount: o.mips || 1, sampleCount: o.samples || 1, dimension: o.d ? '3d' : '2d' });
+// ---------------------------------------------------------------- world data -> GPU
+// marks a load in progress (see LV in math.js); leaving the page before it ends is not a crash
+keep('duneLoad', 1);
+addEventListener('pagehide', () => { try { delete localStorage.duneLoad; } catch {} });
+await tick(0.02, 'Lighting the sky…');
+// the sky texture is redrawn by the GPU whenever the sun moves
+const texSky = device.createTexture({ size: [SKW, SKH], format: 'rgba16float', usage: TU.TEXTURE_BINDING | TU.RENDER_ATTACHMENT }), viewSky = texSky.createView();
+await tick(0.05, 'Piling up dunes…');
+const { mips, tx } = await buildTerrain(tick);
+await tick(0.94, 'Building the bike…');
+// heights, plus 6 smoothed half-size copies for the coarser terrain patches (tent filter centred on each kept sample)
+const texH = device.createTexture({ size: [TN, TN], format: 'r32float', mipLevelCount: 7, usage: TU.TEXTURE_BINDING | TU.COPY_DST });
+for (let l = 0, n = TN, src = TH; l < 7; l++) {
+  device.queue.writeTexture({ texture: texH, mipLevel: l }, src, { bytesPerRow: n * 4 }, [n, n]);
+  const m = n >> 1, d = new Float32Array(m * m), w = [0.25, 0.5, 0.25];
+  for (let j = 0; j < m; j++) for (let i = 0; i < m; i++) {
+    let a = 0;
+    for (let v = -1; v <= 1; v++) for (let u = -1; u <= 1; u++) a += src[((i * 2 + u) & (n - 1)) + ((j * 2 + v) & (n - 1)) * n] * w[u + 1] * w[v + 1];
+    d[i + j * m] = a;
+  }
+  n = m; src = d;
+}
+const texN = device.createTexture({ size: [TN, TN], format: 'rgba16float', mipLevelCount: mips.length, usage: TU.TEXTURE_BINDING | TU.COPY_DST });
+for (let l = 0; l < mips.length; l++) device.queue.writeTexture({ texture: texN, mipLevel: l }, mips[l].d, { bytesPerRow: mips[l].n * 8 }, [mips[l].n, mips[l].n]);
+mips.length = 0;
+const texX = device.createTexture({ size: [HN, HN], format: 'rgba16float', usage: TU.TEXTURE_BINDING | TU.COPY_DST });
+device.queue.writeTexture({ texture: texX }, tx, { bytesPerRow: HN * 8 }, [HN, HN]);
+// the baked sand relief (drawn into further down, once the pipelines exist)
+const texD = device.createTexture({ size: [1024, 1024], format: 'rgba8unorm', mipLevelCount: 11, usage: TU.TEXTURE_BINDING | TU.RENDER_ATTACHMENT });
+const SMN = LV ? 1024 : 2048, texSM = device.createTexture({ size: [SMN, SMN], format: 'depth32float', usage: TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING }), viewSM = texSM.createView();
 
-// ---------------------------------------------------------------- static resources
-const sRep = device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', maxAnisotropy: LV > 1 ? 1 : 8 });
-const sClamp = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-const sCmp = device.createSampler({ compare: 'less-equal', magFilter: 'linear', minFilter: 'linear' });
-const tShadow = tex(SHADOW, SHADOW, DEPTH, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING);
-const tDummy = tex(1, 1, DEPTH, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING);
-const tWater = tex(WATER, WATER, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING, { mips: 5 });
-const tDetail = tex(1024, 1024, 'rgba8unorm', TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING, { mips: 11 });
-const tVol = tex(NX / 2, NY / 2, 'rg8unorm', TU.TEXTURE_BINDING | TU.COPY_DST, { d: NZ / 2 });
-const tMap = tex(512, 512, 'rgba8unorm', TU.TEXTURE_BINDING | TU.COPY_DST);
+const mkBuf = (data, usage) => { const b = device.createBuffer({ size: (data.byteLength + 3) & ~3, usage: usage | BU.COPY_DST }); device.queue.writeBuffer(b, 0, data); return b; };
+const U = new Float32Array(80), UB = device.createBuffer({ size: U.byteLength, usage: BU.UNIFORM | BU.COPY_DST });
 
-const UB = new Float32Array(60), UBS = new Float32Array(60);
-const ubo = device.createBuffer({ size: 240, usage: BU.UNIFORM | BU.COPY_DST }), uboS = device.createBuffer({ size: 240, usage: BU.UNIFORM | BU.COPY_DST });
-const WT = new Float32Array(4), uboW = device.createBuffer({ size: 16, usage: BU.UNIFORM | BU.COPY_DST });
+// terrain patch: 32 x 32 cells plus a skirt around the edge that hides the seams between detail levels
+const GN = 32, gv = [], gi = [];
+for (let j = 0; j <= GN; j++) for (let i = 0; i <= GN; i++) gv.push(i, j, 0);
+for (let j = 0; j < GN; j++) for (let i = 0; i < GN; i++) { const a = i + j * (GN + 1), b = a + 1, c = a + GN + 2, d = a + GN + 1; gi.push(a, b, c, a, c, d); }
+for (const e of [(k) => [k, 0], (k) => [GN, k], (k) => [GN - k, GN], (k) => [0, GN - k]]) {
+  const base = gv.length / 3;
+  for (let k = 0; k <= GN; k++) { const [i, j] = e(k); gv.push(i, j, 1); }
+  for (let k = 0; k < GN; k++) { const [i0, j0] = e(k), [i1, j1] = e(k + 1), a = i0 + j0 * (GN + 1), b = i1 + j1 * (GN + 1); gi.push(a, b, base + k + 1, a, base + k + 1, base + k); }
+}
+const gridVB = mkBuf(new Float32Array(gv), BU.VERTEX), gridIB = mkBuf(new Uint16Array(gi), BU.INDEX), gridN = gi.length;
+const MAXN = 1024, NODES = new Float32Array(MAXN * 4), nodeVB = device.createBuffer({ size: NODES.byteLength, usage: BU.VERTEX | BU.COPY_DST });
 
-const VF = SS.VERTEX | SS.FRAGMENT;
-const bgl0 = device.createBindGroupLayout({ entries: [
-  { binding: 0, visibility: VF, buffer: {} },
-  { binding: 1, visibility: VF, sampler: {} }, { binding: 2, visibility: VF, sampler: {} }, { binding: 3, visibility: VF, sampler: { type: 'comparison' } },
-  { binding: 4, visibility: VF, texture: { sampleType: 'depth' } },
-  { binding: 5, visibility: VF, texture: {} }, { binding: 6, visibility: VF, texture: {} },
-  { binding: 7, visibility: VF, texture: { viewDimension: '3d' } }, { binding: 8, visibility: VF, texture: {} }] });
-const mkBG0 = (u, sh) => device.createBindGroup({ layout: bgl0, entries: [
-  { binding: 0, resource: { buffer: u } }, { binding: 1, resource: sRep }, { binding: 2, resource: sClamp }, { binding: 3, resource: sCmp },
-  { binding: 4, resource: sh.createView() }, { binding: 5, resource: tWater.createView() }, { binding: 6, resource: tDetail.createView() },
-  { binding: 7, resource: tVol.createView() }, { binding: 8, resource: tMap.createView() }] });
-const bg0 = mkBG0(ubo, tShadow), bg0s = mkBG0(uboS, tDummy);
-const pl0 = device.createPipelineLayout({ bindGroupLayouts: [bgl0] });
+// ---------------------------------------------------------------- pipelines
+const lin = { magFilter: 'linear', minFilter: 'linear' };
+const BGL_M = device.createBindGroupLayout({ entries: [
+  { binding: 0, visibility: VIS.VERTEX | VIS.FRAGMENT, buffer: {} },
+  { binding: 1, visibility: VIS.VERTEX | VIS.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
+  { binding: 2, visibility: VIS.VERTEX | VIS.FRAGMENT, texture: {} },
+  { binding: 3, visibility: VIS.VERTEX | VIS.FRAGMENT, sampler: {} },
+  { binding: 4, visibility: VIS.FRAGMENT, texture: {} },
+  { binding: 5, visibility: VIS.FRAGMENT, sampler: {} },
+  { binding: 6, visibility: VIS.FRAGMENT, texture: { sampleType: 'depth' } },
+  { binding: 7, visibility: VIS.FRAGMENT, sampler: { type: 'comparison' } },
+  { binding: 8, visibility: VIS.VERTEX | VIS.FRAGMENT, texture: {} },
+  { binding: 9, visibility: VIS.FRAGMENT, texture: {} }] });
+const BGL_S = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: VIS.VERTEX | VIS.FRAGMENT, buffer: {} }] });
+const BGL_P = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: VIS.VERTEX, buffer: {} }] });
+const bgM = device.createBindGroup({ layout: BGL_M, entries: [
+  { binding: 0, resource: { buffer: UB } },
+  { binding: 1, resource: texH.createView() },
+  { binding: 2, resource: texN.createView() },
+  { binding: 3, resource: device.createSampler({ ...lin, mipmapFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat', maxAnisotropy: 8 }) },
+  { binding: 4, resource: viewSky },
+  { binding: 5, resource: device.createSampler({ ...lin, addressModeU: 'repeat' }) },
+  { binding: 6, resource: viewSM },
+  { binding: 7, resource: device.createSampler({ ...lin, compare: 'less' }) },
+  { binding: 8, resource: texX.createView() },
+  { binding: 9, resource: texD.createView() }] });
+const bgS = device.createBindGroup({ layout: BGL_S, entries: [{ binding: 0, resource: { buffer: UB } }] });
+const plM = device.createPipelineLayout({ bindGroupLayouts: [BGL_M] }), plMP = device.createPipelineLayout({ bindGroupLayouts: [BGL_M, BGL_P] });
+const pipe = (layout, code, buffers, write, compare, blend) => {
+  const m = device.createShaderModule({ code });
+  return device.createRenderPipeline({
+    layout, vertex: { module: m, entryPoint: 'vs', buffers }, fragment: { module: m, entryPoint: 'fs', targets: [{ format: HDR, blend }] },
+    primitive: { topology: 'triangle-list', cullMode: 'none' }, depthStencil: { format: 'depth32float', depthWriteEnabled: write, depthCompare: compare }, multisample: { count: AA },
+  });
+};
+const VB_MESH = [{ arrayStride: 16, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'snorm8x4' }] }];
+const pTerrain = pipe(plM, W_TERRAIN, [
+  { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] },
+  { arrayStride: 16, stepMode: 'instance', attributes: [{ shaderLocation: 1, offset: 0, format: 'float32x4' }] }], true, 'greater');
+const pBike = pipe(plMP, W_BIKE, VB_MESH, true, 'greater');
+const pSky = pipe(plM, W_SKY, [], false, 'greater-equal');
+const pDust = pipe(plM, W_DUST, [{ arrayStride: 32, stepMode: 'instance', attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x4' }, { shaderLocation: 1, offset: 16, format: 'float32x4' }] }], false, 'greater',
+  { color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'zero', dstFactor: 'one' } });
+const pTrack = pipe(plM, W_TRACK, [{ arrayStride: 32, stepMode: 'instance', attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x4' }, { shaderLocation: 1, offset: 16, format: 'float32x4' }] }], false, 'greater',
+  { color: { srcFactor: 'zero', dstFactor: 'src' }, alpha: { srcFactor: 'zero', dstFactor: 'one' } });
+const pShadow = device.createRenderPipeline({
+  layout: device.createPipelineLayout({ bindGroupLayouts: [BGL_S, BGL_P] }),
+  vertex: { module: device.createShaderModule({ code: W_SHADOW }), entryPoint: 'vs', buffers: [{ arrayStride: 16, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] },
+  primitive: { topology: 'triangle-list', cullMode: 'none' }, depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' },
+});
 
-const bglBlit = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: SS.FRAGMENT, texture: {} }, { binding: 1, visibility: SS.FRAGMENT, sampler: {} }] });
-const plBlit = device.createPipelineLayout({ bindGroupLayouts: [bglBlit] });
-const mBlit = mod(W_BLIT);
-const blitPipe = (entry, format, add) => device.createRenderPipeline({ layout: plBlit, vertex: { module: mBlit, entryPoint: 'vs' },
-  fragment: { module: mBlit, entryPoint: entry, targets: [{ format, blend: add ? { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } } : undefined }] } });
-const pMip8 = blitPipe('fsMip', 'rgba8unorm'), pMip16 = blitPipe('fsMip', HDR), pDown0 = blitPipe('fsDown0', HDR), pDown = blitPipe('fsDown', HDR), pUp = blitPipe('fsUp', HDR, true);
-const blitBG = (view) => device.createBindGroup({ layout: bglBlit, entries: [{ binding: 0, resource: view }, { binding: 1, resource: sClamp }] });
-const colorAtt = (view, clear) => ({ view, loadOp: clear ? 'clear' : 'load', storeOp: 'store', clearValue: [0, 0, 0, 0] });
+// stones and scrub, and the shadows they throw
+const MULT = { color: { srcFactor: 'zero', dstFactor: 'src' }, alpha: { srcFactor: 'zero', dstFactor: 'one' } };
+const VB_INST = { arrayStride: 32, stepMode: 'instance', attributes: [{ shaderLocation: 2, offset: 0, format: 'float32x4' }, { shaderLocation: 3, offset: 16, format: 'float32x4' }] };
+const pProp = pipe(plM, W_PROP, [VB_MESH[0], VB_INST], true, 'greater');
+const pPShadow = pipe(plM, W_PSHADOW, [{ arrayStride: 32, stepMode: 'instance', attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x4' }, { shaderLocation: 1, offset: 16, format: 'float32x4' }] }], false, 'greater', MULT);
+const propData = buildProps(), PROPS = [['rock', 'rocks'], ['pebble', 'pebbles']].map(([m, i]) => ({ vb: mkBuf(propData[m].vb, BU.VERTEX), ib: mkBuf(propData[m].ib, BU.INDEX), n: propData[m].ib.length, inst: mkBuf(propData[i], BU.VERTEX), count: propData[i].length / 8 }));
+const tuftVB = mkBuf(propData.tufts, BU.VERTEX), tuftN = propData.tufts.length / 8, bladeVB = mkBuf(propData.blades, BU.VERTEX), bladeN = propData.blades.length / 8;
+const INST2 = [{ arrayStride: 32, stepMode: 'instance', attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x4' }, { shaderLocation: 1, offset: 16, format: 'float32x4' }] }];
+const pGrass = pipe(plM, W_GRASS, INST2, true, 'greater');
+// dust motes: fixed random points in a box that wraps around the camera
+rseed(6);
+const MOTES = [3500, 1800, 1][LV], moteD = new Float32Array(MOTES * 4); for (let i = 0; i < moteD.length; i++) moteD[i] = rnd();
+const moteVB = mkBuf(moteD, BU.VERTEX);
+const pMote = pipe(plM, W_MOTE, [{ arrayStride: 16, stepMode: 'instance', attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x4' }] }], false, 'greater', { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'zero', dstFactor: 'one' } });
 
-// vertex layouts
-const A = (shaderLocation, offset, format) => ({ shaderLocation, offset, format });
-const vbSolid = { arrayStride: 16, attributes: [A(0, 0, 'float32x3'), A(1, 12, 'snorm8x4')] };
-const ibSolid = { arrayStride: 48, stepMode: 'instance', attributes: [A(2, 0, 'float32x4'), A(3, 16, 'float32x4'), A(4, 32, 'float32x4')] };
-const ibLeaf = { arrayStride: 36, stepMode: 'instance', attributes: [A(0, 0, 'float32x4'), A(1, 16, 'float32x4'), A(2, 32, 'unorm8x4')] };
-const ibAnim = { arrayStride: 32, stepMode: 'instance', attributes: [A(2, 0, 'float32x4'), A(3, 16, 'float32x4')] };
-const ibBub = { arrayStride: 32, stepMode: 'instance', attributes: [A(0, 0, 'float32x4'), A(1, 16, 'float32x4')] };
-const ibSnow = { arrayStride: 16, stepMode: 'instance', attributes: [A(0, 0, 'float32x4')] };
-
-const scenePipe = (m, vsE, fsE, buffers, o = {}) => device.createRenderPipeline({ layout: pl0,
-  vertex: { module: m, entryPoint: vsE, buffers, constants: o.constants },
-  fragment: { module: m, entryPoint: fsE, targets: [{ format: HDR, blend: o.blend }] },
-  primitive: { topology: o.strip ? 'triangle-strip' : 'triangle-list', cullMode: o.cull || 'none' },
-  depthStencil: { format: DEPTH, depthWriteEnabled: !o.blend, depthCompare: 'greater' }, multisample: { count: AA } });
-const shadowPipe = (m, vsE, buffers, o = {}) => device.createRenderPipeline({ layout: pl0,
-  vertex: { module: m, entryPoint: vsE, buffers, constants: o.constants },
-  primitive: { topology: o.strip ? 'triangle-strip' : 'triangle-list', cullMode: o.cull || 'none' },
-  depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'less', depthBias: 2, depthBiasSlopeScale: 1.5 } });
-
-await say('Compiling shaders…', 0.05, 300);
-const mSolid = mod(W_SOLID), mLeaf = mod(W_LEAF), mAnim = mod(W_ANIM), mSurf = mod(W_SURF), mSpr = mod(W_SPR);
-const pTerrain = scenePipe(mSolid, 'vs', 'fs', [vbSolid, ibSolid], { cull: 'back' });
-const pSolid = scenePipe(mSolid, 'vs', 'fs', [vbSolid, ibSolid]);
-const pLeaf = scenePipe(mLeaf, 'vs', 'fs', [ibLeaf], { strip: true, constants: { ROWS: 9 } });
-const pLeaf5 = scenePipe(mLeaf, 'vs', 'fs', [ibLeaf], { strip: true, constants: { ROWS: 5 } });
-const pLeafS = scenePipe(mLeaf, 'vs', 'fs', [ibLeaf], { strip: true, constants: { ROWS: 3, FAR: 70 } });
-const pLeafF = scenePipe(mLeaf, 'vs', 'fs', [ibLeaf], { strip: true, constants: { ROWS: 3 } });
-const pFish = scenePipe(mAnim, 'vsFish', 'fsFish', [vbSolid, ibAnim]);
-const pManta = scenePipe(mAnim, 'vsManta', 'fsManta', [vbSolid, ibAnim]);
-const pSurf = scenePipe(mSurf, 'vs', 'fs', [], { strip: true }), pBack = scenePipe(mSurf, 'vsB', 'fsB', [], { strip: true });
-const pBub = scenePipe(mSpr, 'vsBub', 'fsBub', [ibBub], { strip: true, blend: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } } });
+// post chain: light shafts, their blur, bloom, composite
+const BGL_D = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: VIS.FRAGMENT, texture: { sampleType: 'depth', multisampled: true } }] });
+const fsPipe = (code, format, layout = 'auto', entry = 'fs', blend) => { const m = device.createShaderModule({ code }); return device.createRenderPipeline({ layout, vertex: { module: m, entryPoint: 'vs' }, fragment: { module: m, entryPoint: entry, targets: [{ format, blend }] } }); };
+const pRays = fsPipe(W_RAYS, HDR, device.createPipelineLayout({ bindGroupLayouts: [BGL_M, BGL_D] })), pRB = fsPipe(W_RBLUR, HDR), pPost = fsPipe(W_POST, FMT);
+const BGL_B = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: VIS.FRAGMENT, texture: {} }, { binding: 1, visibility: VIS.FRAGMENT, sampler: {} }] }), plB = device.createPipelineLayout({ bindGroupLayouts: [BGL_B] });
 const ADD = { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } };
-const pSnow = scenePipe(mSpr, 'vsSnow', 'fsSnow', [ibSnow], { strip: true, blend: ADD });
-const pGl = scenePipe(mLeaf, 'vsGl', 'fsGl', [ibBub], { strip: true, blend: ADD, constants: { ROWS: 7 } });
-const pSolidSh = shadowPipe(mSolid, 'vs', [vbSolid, ibSolid]), pTerrSh = shadowPipe(mSolid, 'vs', [vbSolid, ibSolid], { cull: 'front' });
-const pLeafSh = shadowPipe(mLeaf, 'vs', [ibLeaf], { strip: true, constants: { ROWS: 3 } });
-
-const mWater = mod(W_WATER);
-const pWater = device.createRenderPipeline({ layout: 'auto', vertex: { module: mWater, entryPoint: 'vs' }, fragment: { module: mWater, entryPoint: 'fs', targets: [{ format: HDR }] } });
-const bgWater = device.createBindGroup({ layout: pWater.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: uboW } }] });
-const waterViews = [0, 1, 2, 3, 4].map((m) => tWater.createView({ baseMipLevel: m, mipLevelCount: 1 }));
-const waterBG = waterViews.map((v) => blitBG(v));
-const waterPass = waterViews.map((v) => ({ colorAttachments: [colorAtt(v, true)] }));
-
-const mRays = mod(W_RAYS), mPost = mod(W_POST), mRB = mod(W_RBLUR);
-const pRB = device.createRenderPipeline({ layout: 'auto', vertex: { module: mRB, entryPoint: 'vs' }, fragment: { module: mRB, entryPoint: 'fs', targets: [{ format: HDR }] } });
-const pRays = device.createRenderPipeline({ layout: 'auto', vertex: { module: mRays, entryPoint: 'vs' }, fragment: { module: mRays, entryPoint: 'fs', targets: [{ format: HDR }] } });
-const pPost = device.createRenderPipeline({ layout: 'auto', vertex: { module: mPost, entryPoint: 'vs' }, fragment: { module: mPost, entryPoint: 'fs', targets: [{ format: FMT }] } });
-
-// ---------------------------------------------------------------- sun + shadow matrix
-const SUN = (() => { const v = [0.27, 1, -0.24], l = hypot(...v); return v.map((c) => c / l); })();
+const pDown0 = fsPipe(W_BLIT, HDR, plB, 'fsDown0'), pDown = fsPipe(W_BLIT, HDR, plB, 'fsDown'), pUp = fsPipe(W_BLIT, HDR, plB, 'fsUp', ADD);
+const sClamp = device.createSampler(lin);
+// bake the sand relief once, then its smaller copies
 {
-  const L = SUN, lr = [L[1], -L[0], 0], ll = hypot(...lr); lr[0] /= ll; lr[1] /= ll;
-  const lu = [L[1] * lr[2] - L[2] * lr[1], L[2] * lr[0] - L[0] * lr[2], L[0] * lr[1] - L[1] * lr[0]];
-  const R = 225, d0 = -175, d1 = 125, m = UBS;
-  m[0] = lr[0] / R; m[4] = lr[1] / R; m[8] = lr[2] / R; m[12] = 0;
-  m[1] = lu[0] / R; m[5] = lu[1] / R; m[9] = lu[2] / R; m[13] = 0;
-  m[2] = -L[0] / (d1 - d0); m[6] = -L[1] / (d1 - d0); m[10] = -L[2] / (d1 - d0); m[14] = d1 / (d1 - d0);
-  m[3] = 0; m[7] = 0; m[11] = 0; m[15] = 1;
-  for (let i = 0; i < 16; i++) { UBS[16 + i] = m[i]; UB[16 + i] = m[i]; }
-  for (let i = 0; i < 3; i++) { UB[48 + i] = UBS[48 + i] = SUN[i]; }
-  UBS[32] = 0; UBS[33] = -20; UBS[34] = 0; UBS[35] = 0; UBS[58] = 1;
-  Q.writeBuffer(uboS, 0, UBS);
-}
-
-// ---------------------------------------------------------------- world generation
-await say('Sculpting the seabed…', 0.25, 1200);
-// marks a load in progress (quality.js); leaving the page before it ends is not a crash
-keep('abyssalLoad', 1);
-addEventListener('pagehide', () => keep('abyssalLoad', ''));
-let D;
-{
-  const prims = primBuffer();
-  const m = mod(W_DENS), p = device.createComputePipeline({ layout: 'auto', compute: { module: m, entryPoint: 'main' } });
-  const size = NX * NY * NZ * 4;
-  const u = new ArrayBuffer(48), uu = new Uint32Array(u), uf = new Float32Array(u);
-  uu[0] = NX; uu[1] = NY; uu[2] = NZ; uf[4] = OX; uf[5] = OY; uf[6] = OZ; uf[7] = VS;
-  uu[8] = MESAS.length; uu[9] = ARCHES.length; uu[10] = HOLES.length; uu[11] = CLEARS.length;
-  const bu = buf(new Uint8Array(u), BU.UNIFORM), bp = buf(prims, BU.STORAGE);
-  const bd = device.createBuffer({ size, usage: BU.STORAGE | BU.COPY_SRC }), br = device.createBuffer({ size, usage: BU.MAP_READ | BU.COPY_DST });
-  const bg = device.createBindGroup({ layout: p.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: bu } }, { binding: 1, resource: { buffer: bd } }, { binding: 2, resource: { buffer: bp } }] });
-  const e = device.createCommandEncoder(), c = e.beginComputePass();
-  c.setPipeline(p); c.setBindGroup(0, bg); c.dispatchWorkgroups(NX / 4, NY / 4, NZ / 4); c.end();
-  e.copyBufferToBuffer(bd, 0, br, 0, size);
-  Q.submit([e.finish()]);
-  await br.mapAsync(GPUMapMode.READ);
-  D = new Float32Array(br.getMappedRange().slice(0));
-  br.unmap(); br.destroy(); bd.destroy();
-  // rock connected to the seabed: each column's unbroken run up from the bottom is, and the rock above a gap
-  // (overhangs, specks) is when it touches rock that is. What never connects is a speck of noise floating in
-  // the water (surface nets would make it a small box), so it becomes water
-  const S = NX * NY, R = new Uint8Array(D.length), O = [1, -1, NX, -NX, S, -S], b = new Uint8Array(NX), L = [];
-  for (let i = 0; i < D.length;) { b.fill(1); for (let y = 0; y < NY; y++) for (let x = 0; x < NX; x++, i++) if (D[i] <= 0) b[x] = 0; else if (b[x]) R[i] = 1; else L.push(i); }
-  for (let k = 1; k; L.reverse()) { k = 0; for (const i of L) if (!R[i] && O.some((o) => R[i + o])) R[i] = k = 1; }
-  for (const i of L) if (!R[i]) D[i] = -D[i];
-}
-// Distance to the rock for collide(), in 1/127 m (> 0 in rock, clamped to ±1 m), kept only in the 4x4x4-voxel
-// bricks near the surface within the camera's reach (~2 MB). CI per brick: 0 all water, 1 all rock, n brick n-2 in CG.
-const CO = 52, CN = 102, CI = new Uint16Array(CN * CN * NY / 4);
-let CG = new Int8Array(64 * 65534);
-{
-  let n = 0;
-  for (let bz = 0; bz < CN; bz++) for (let by = 1; by < NY / 4 - 1; by++) for (let bx = 0; bx < CN; bx++) {
-    if (hypot(bx - CN / 2 + 0.5, bz - CN / 2 + 0.5) > 52) continue; // more than 156 m out: never reached
-    let lo = 127, hi = -127;
-    for (let z = 0; z < 4; z++) for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) {
-      const i = CO + bx * 4 + x + NX * (by * 4 + y + NY * (CO + bz * 4 + z)), gz = D[i + NX * NY] - D[i - NX * NY];
-      const gx = D[i + 1] - D[i - 1], g = D[i + NX] - D[i - NX], l = sqrt(gx * gx + g * g + gz * gz) / 1.5;
-      const q = round(clamp(D[i] / max(l, 0.05), -1, 1) * 127);
-      CG[n * 64 + x + 4 * y + 16 * z] = q; if (q < lo) lo = q; if (q > hi) hi = q;
-    }
-    CI[bx + CN * (by + NY / 4 * bz)] = lo === hi && lo * lo === 16129 ? +(lo > 0) : (n++, n + 1);
-  }
-  CG = CG.slice(0, n * 64);
-}
-await say('Carving canyons…', 0.32, 400);
-const T = buildTerrain(D);
-
-// preset viewpoints (position, look-at), keys 1-6; the world generator dresses the scene around them
-const POSES = [
-  [10, 1.3, 7, -9, -31, -10],
-  [50, 1.3, 34, 58, -23, 8],
-  [-26, 2.2, -100, 0, -9, -108],
-  [-55, 1.5, -18, -60, -30, 8],
-  [10, 1.2, -62, 6, -22, -90],
-  [3, 1.6, 62, 1, -28, 100],
-];
-// 60 s camera path (position + look-at, Catmull-Rom): the world generator keeps it clear, dev.js flies along it
-const FLY = new Float32Array([
-  10, -42.2, 7, -9, -31, -10,
-  7.5, -41.8, 5.5, -10, -31, -12,
-  9, -40.5, 18, 17, -37, 42,
-  22, -39.2, 40, 48, -36, 45,
-  38, -39.2, 46, 57, -27, 18,
-  50, -40.4, 35, 58, -24, 8,
-  55, -39, 20, 60, -18, -10,
-  58, -34, -12, 40, -26, -60,
-  50, -30, -44, 10, -26, -80,
-  30, -30, -70, 4, -28, -90,
-  12, -38.5, -62, 6, -27, -90,
-  -4, -36.5, -70, 0, -14, -100,
-  -16, -37, -84, 0, -22, -108,
-  -29, -38, -90, -44, -34, -60,
-  -41, -38, -70, -56, -34, -40,
-  -53, -38, -50, -60, -34, -20,
-  -58, -38, -28, -60, -32, 0,
-  -57, -38, -10, -60, -30, 16,
-  -60, -38, 10, -50, -36, 40,
-  -52, -37, 36, -20, -35, 44,
-  -22, -38, 43, 4, -38, 52,
-  -6, -39.2, 44.5, 4, -37, 70,
-  3, -40.6, 53, 3, -35, 84,
-  3, -41.5, 62, 1, -30, 100,
-  4, -39, 76, 3, -22, 100,
-]);
-const FLYN = FLY.length / 6, FLYT = 60, LUTN = 1024, flyLUT = new Float32Array(LUTN + 1);
-const flyPts = [];
-// per-frame float state lives in one preallocated array, so the frame loop allocates no heap numbers
-const F = new Float64Array(32), P6 = new Float64Array(6);
-const CX = 0, CY = 1, CZ = 2, YAW = 3, PIT = 4, FX = 5, FY = 6, FZ = 7, RX = 8, RZ = 9, UX = 10, UY = 11, UZ = 12, VX = 13, VY = 14, VZ = 15, TIME = 16, FLT = 17, LAST = 18, GPU = 19, HUDT = 20, SPL = 21, MX = 22, MY = 23, MZ = 24;
-// aim the camera from P6 = position + look-at point
-function aim() {
-  const dx = P6[3] - P6[0], dy = P6[4] - P6[1], dz = P6[5] - P6[2];
-  F[CX] = P6[0]; F[CY] = P6[1]; F[CZ] = P6[2];
-  F[YAW] = atan2(dx, -dz); F[PIT] = atan2(dy, sqrt(dx * dx + dz * dz));
-}
-const lookAt = (x, y, z, tx, ty, tz) => { P6[0] = x; P6[1] = y; P6[2] = z; P6[3] = tx; P6[4] = ty; P6[5] = tz; aim(); };
-// camera spline (Catmull-Rom over position + look-at) at parameter F[SPL]
-function flyRaw() {
-  const s = F[SPL]; let i = floor(s) | 0; if (i > FLYN - 2) i = FLYN - 2;
-  const u = s - i, i0 = (i > 0 ? i - 1 : 0) * 6, i1 = i * 6, i2 = (i + 1) * 6, i3 = (i + 2 < FLYN ? i + 2 : FLYN - 1) * 6;
-  for (let o = 0; o < 6; o++) {
-    const a = FLY[i0 + o], b = FLY[i1 + o], c = FLY[i2 + o], d = FLY[i3 + o];
-    P6[o] = 0.5 * (2 * b + (c - a) * u + (2 * a - 5 * b + 4 * c - d) * u * u + (3 * b - a - 3 * c + d) * u * u * u);
-  }
-  aim();
-}
-{ // arc-length table: flyLUT[k] = spline parameter at fraction k/LUTN of the total path length
-  const M = 4096, len = new Float32Array(M + 1); let px = 0, py = 0, pz = 0;
-  for (let k = 0; k <= M; k++) { F[SPL] = k / M * (FLYN - 1); flyRaw(); if (k) len[k] = len[k - 1] + hypot(F[CX] - px, F[CY] - py, F[CZ] - pz); px = F[CX]; py = F[CY]; pz = F[CZ]; }
-  for (let k = 0, j = 0; k <= LUTN; k++) { const d = k / LUTN * len[M]; while (j < M - 1 && len[j + 1] < d) j++; flyLUT[k] = (j + (d - len[j]) / max(len[j + 1] - len[j], 1e-6)) / M * (FLYN - 1); }
-}
-// camera on the scripted path at time F[FLT]
-function flyAt() {
-  let s = F[FLT] / FLYT; s = s < 0 ? 0 : s > 1 ? 1 : s; s = s * s * (3 - 2 * s) * 0.25 + s * 0.75;
-  s *= LUTN; let k = floor(s) | 0; if (k > LUTN - 1) k = LUTN - 1;
-  F[SPL] = flyLUT[k] + (flyLUT[k + 1] - flyLUT[k]) * (s - k); flyRaw();
-}
-for (let t = 0; t <= FLYT; t += 0.1) { F[FLT] = t; flyAt(); flyPts.push([F[CX], F[CY], F[CZ]]); }
-for (const p of POSES) flyPts.push([p[0], -40, p[2]]);
-
-await say('Growing kelp…', 0.73, 2500);
-const Wd = makeWorld(D, T, flyPts, POSES);
-for (const p of POSES) p[1] += Wd.gy(p[0], p[2]);
-D = Wd.gy = T.smp = null; // with gy goes the generator's working memory (about 200 MB)
-
-await say('Building set pieces…', 0.94, 1200);
-// mesh ids: 0-3 boulders, 4-6 sponges, 7-8 coral, 9 tube sponge, 10 whale fluke, 11 ship, 12 manta, 13 fish,
-// 14-20 rock chunks + pebbles, 21-22 coral LOD, 23-25 far LOD of the large rock chunks
-const meshes = [meshChunk(1, 3), meshChunk(7, 3), meshChunk(13, 3), meshChunk(22, 3),
-  meshLathe([[0, 0, 0.5], [0.34, 0, 0.6], [0.5, 0.2, 0.85], [0.6, 0.6, 1], [0.55, 0.95, 1], [0.47, 1.08, 1], [0.38, 1.1, 0.9], [0.3, 1.0, 0.45], [0.26, 0.6, 0.15], [0, 0.35, 0.05]], 18, 0.3, 9),
-  meshLathe([[0, 0, 0.5], [0.2, 0, 0.6], [0.26, 0.5, 0.85], [0.4, 1.25, 1], [0.4, 1.42, 1], [0.33, 1.48, 0.9], [0.26, 1.38, 0.4], [0.18, 0.8, 0.12], [0, 0.5, 0.05]], 16, 0.35, 8),
-  meshLathe([[0, 0, 0.5], [0.5, 0, 0.7], [0.72, 0.18, 1], [0.74, 0.38, 1], [0.62, 0.5, 0.9], [0.48, 0.42, 0.45], [0.4, 0.2, 0.15], [0, 0.14, 0.06]], 18, 0.25, 10),
-  meshCoral(0), meshCoral(1), meshTubes()].map((m) => m.build());
-meshes.push(meshFluke(), meshShip().build(), meshManta().build(), meshFish().build(),
-  meshChunk(3).build(), meshChunk(11).build(), meshChunk(29).build(), meshChunk(5, 3).build(), meshChunk(17, 3).build(), meshChunk(41, 3).build(), meshChunk(9, 1).build(), meshCoral(0, 1).build(), meshCoral(1, 1).build(), meshChunk(5, 2, 1).build(), meshChunk(17, 2, 1).build(), meshChunk(41, 2, 1).build());
-let nV = 0, nI = 0;
-for (const m of meshes) { m.v0 = nV; m.i0 = nI; nV += m.nv; nI += m.ib.length; }
-const allV = new Uint8Array(nV * 16), allI = new Uint32Array(nI);
-for (const m of meshes) { allV.set(new Uint8Array(m.vb), m.v0 * 16); allI.set(m.ib, m.i0); }
-const vbMesh = buf(allV, BU.VERTEX), ibMesh = buf(allI, BU.INDEX);
-const vbTerrain = buf(new Uint8Array(T.vb), BU.VERTEX), ibTerrain = buf(T.ib, BU.INDEX);
-const nSolid = Wd.solids.data.length / 12;
-const solidData = new Float32Array((nSolid + 1) * 12); solidData.set(Wd.solids.data); solidData.set([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0], nSolid * 12);
-const ibSolids = buf(solidData, BU.VERTEX);
-const ibChunk = Wd.chunks.map((c) => buf(c.data, BU.VERTEX)), ibProp = Wd.props.map((c) => buf(c.data, BU.VERTEX));
-const ibBig = buf(new Uint8Array(Wd.big.buf), BU.VERTEX), ibBigF = buf(new Uint8Array(Wd.bigF.buf), BU.VERTEX), ibSmall = buf(new Uint8Array(Wd.small.buf), BU.VERTEX);
-const ibFish = buf(Wd.fish, BU.VERTEX), ibManta = buf(Wd.mantas, BU.VERTEX), ibBubbles = buf(Wd.bubbles, BU.VERTEX), ibSnowB = buf(Wd.snow, BU.VERTEX);
-const ibGl = buf(Wd.glints, BU.VERTEX), nGl = Wd.glints.length / 8;
-const nFish = Wd.fish.length / 8, nManta = Wd.mantas.length / 8, nBub = Wd.bubbles.length / 8, nSnow = Wd.snow.length / 4;
-const MANTA = meshes[12], FISH = meshes[13];
-Q.writeTexture({ texture: tVol }, Wd.volD, { bytesPerRow: NX, rowsPerImage: NY / 2 }, [NX / 2, NY / 2, NZ / 2]);
-Q.writeTexture({ texture: tMap }, Wd.gm, { bytesPerRow: 2048 }, [512, 512]);
-
-// ---------------------------------------------------------------- one-time bakes: detail texture, shadow map
-{
-  const m = mod(W_DETAIL), p = device.createRenderPipeline({ layout: 'auto', vertex: { module: m, entryPoint: 'vs' }, fragment: { module: m, entryPoint: 'fs', targets: [{ format: 'rgba8unorm' }] } });
-  const e = device.createCommandEncoder();
-  let r = e.beginRenderPass({ colorAttachments: [colorAtt(tDetail.createView({ baseMipLevel: 0, mipLevelCount: 1 }), true)] });
-  r.setPipeline(p); r.draw(3); r.end();
+  const pDetail = fsPipe(W_DETAIL, 'rgba8unorm'), pMip8 = fsPipe(W_BLIT, 'rgba8unorm', plB, 'fsMip'), sRep = device.createSampler({ ...lin, addressModeU: 'repeat', addressModeV: 'repeat' });
+  const e = device.createCommandEncoder(), lv = (i) => texD.createView({ baseMipLevel: i, mipLevelCount: 1 });
+  let r = e.beginRenderPass({ colorAttachments: [{ view: lv(0), loadOp: 'clear', storeOp: 'store' }] }); r.setPipeline(pDetail); r.draw(3); r.end();
   for (let i = 1; i < 11; i++) {
-    r = e.beginRenderPass({ colorAttachments: [colorAtt(tDetail.createView({ baseMipLevel: i, mipLevelCount: 1 }), true)] });
-    r.setPipeline(pMip8); r.setBindGroup(0, blitBG(tDetail.createView({ baseMipLevel: i - 1, mipLevelCount: 1 }))); r.draw(3); r.end();
+    r = e.beginRenderPass({ colorAttachments: [{ view: lv(i), loadOp: 'clear', storeOp: 'store' }] }); r.setPipeline(pMip8);
+    r.setBindGroup(0, device.createBindGroup({ layout: BGL_B, entries: [{ binding: 0, resource: lv(i - 1) }, { binding: 1, resource: sRep }] })); r.draw(3); r.end();
   }
-  r = e.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: tShadow.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
-  r.setBindGroup(0, bg0s);
-  r.setPipeline(pTerrSh);
-  r.setVertexBuffer(0, vbTerrain); r.setVertexBuffer(1, ibSolids); r.setIndexBuffer(ibTerrain, 'uint32');
-  r.drawIndexed(T.ib.length, 1, 0, 0, nSolid);
-  r.setPipeline(pSolidSh); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-  for (let i = 0; i < 12; i++) { const g = Wd.solids.ranges[i]; if (g[1]) r.drawIndexed(meshes[i].ib.length, g[1], meshes[i].i0, meshes[i].v0, g[0]); }
-  // small rocks, sponges and corals (~35M triangles) only on High: too much for a phone's driver
-  if (!LV) for (let i = 0; i < NCHUNK; i++) { r.setVertexBuffer(1, ibChunk[i]); r.drawIndexed(meshes[14 + i].ib.length, Wd.chunks[i].n, meshes[14 + i].i0, meshes[14 + i].v0, 0); }
-  if (!LV) for (let i = 0; i < 6; i++) if (Wd.props[i].n) { r.setVertexBuffer(1, ibProp[i]); r.drawIndexed(meshes[4 + i].ib.length, Wd.props[i].n, meshes[4 + i].i0, meshes[4 + i].v0, 0); }
-  r.setPipeline(pLeafSh); r.setVertexBuffer(0, ibBig); r.draw(6, Wd.big.n);
-  r.end();
-  Q.submit([e.finish()]);
+  device.queue.submit([e.finish()]);
 }
-// the GPU has its own copies now: let go of the generator's (about 300 MB)
-for (const o of [Wd.big, Wd.bigF, Wd.small, ...Wd.chunks, ...Wd.props]) o.buf = o.data = 0;
-Wd.glints = Wd.volD = Wd.gm = T.vb = T.ib = T.wp = T.wn = 0;
 
-// ---------------------------------------------------------------- render targets (rebuilt on resize)
-// The scene is drawn at `pix` pixels and scaled up to the window. frame() tunes it and the draw distance scale `det`
-// for 60 fps; both start where the last visit left them.
-const PIXMAX = 2560 * 1440, PIXMIN = mob ? 25e4 : 5e5, DETMIN = 0.4;
-let W = 0, H = 0, DW = 0, DH = 0, pix = +SV[1] || (LV > 1 ? 41e4 : mob ? 1280 * 720 : PIXMAX), det = +SV[2] || 1, dynN = 0, dynT = 0, dynG = 0, dynGN = 0, dynBad = 0, dynOk = 0, dynWait = 3;
-let passScene, passRays, passBlur, bgBlur, passPost, bgRays, bgPost, bloomPass = [], bloomBG = [], targets = [];
-const NB = 6;
+const mSB = device.createShaderModule({ code: W_SKYBAKE });
+const pSkyBake = device.createRenderPipeline({
+  layout: device.createPipelineLayout({ bindGroupLayouts: [BGL_S] }), vertex: { module: mSB, entryPoint: 'vs' },
+  fragment: { module: mSB, entryPoint: 'fs', targets: [{ format: 'rgba16float' }] }, primitive: { topology: 'triangle-list' },
+});
+
+// bike parts: mesh, model matrix, its uniform buffer
+const meshes = buildBike(), PARTS = ['chassis', 'forkU', 'forkL', 'wheelF', 'wheelR', 'torso', 'helmet', 'uarmL', 'uarmR', 'armL', 'armR', 'thighL', 'thighR', 'shinL', 'shinR', 'wingR1', 'wingR2', 'wingR3', 'finR', 'wingL1', 'wingL2', 'wingL3', 'finL', 'flameR', 'flameL', 'rudder', 'lowR1', 'lowR2', 'lowL1', 'lowL2'].map((name) => {
+  const m = meshes[name], ub = device.createBuffer({ size: 64, usage: BU.UNIFORM | BU.COPY_DST });
+  return { fx: /flame/.test(name), hide: /torso|helmet|uarm/.test(name), vb: mkBuf(m.vb, BU.VERTEX), ib: mkBuf(m.ib, BU.INDEX), n: m.ib.length, ub, mat: new Float32Array(16), bg: device.createBindGroup({ layout: BGL_P, entries: [{ binding: 0, resource: { buffer: ub } }] }) };
+});
+const [pChassis, pForkU, pForkL, pWheelF, pWheelR, pTorso, pHelmet, pUarmL, pUarmR, pArmL, pArmR, pThighL, pThighR, pShinL, pShinR] = PARTS, WINGS = [PARTS.slice(15, 19), PARTS.slice(19, 23)], pRudder = PARTS[25];
+const verr = await device.popErrorScope();
+if (verr) fail('Graphics setup failed: ' + verr.message);
+
+// ---------------------------------------------------------------- dust
+const DN = 1200, dG = new Float32Array(DN), dW = new Float32Array(DN), dA = new Float32Array(DN), dK = new Float32Array(DN), dP = new Float32Array(DN * 3), dV = new Float32Array(DN * 3), dL = new Float32Array(DN), dM = new Float32Array(DN), dS = new Float32Array(DN), dR = new Float32Array(DN);
+const dI = new Float32Array(DN * 8), dustVB = device.createBuffer({ size: dI.byteLength, usage: BU.VERTEX | BU.COPY_DST });
+let dNext = 0, dAcc = 0, rAcc = 0, dCount = 0;
+// one particle: lift (+) or weight (-), how much it swells over its life, opacity, air drag.
+// The defaults are a dust puff; roost grains are small, heavy and fly in an arc.
+const puff = (x, y, z, vx, vy, vz, life, size, grav = 0.25, grow = 5.5, alpha = 0.5, drag = 1.7) => {
+  const i = dNext; dNext = (dNext + 1) % DN; dG[i] = grav; dW[i] = grow; dA[i] = alpha; dK[i] = drag;
+  dP[i * 3] = x; dP[i * 3 + 1] = y; dP[i * 3 + 2] = z; dV[i * 3] = vx; dV[i * 3 + 1] = vy; dV[i * 3 + 2] = vz; dL[i] = dM[i] = life; dS[i] = size; dR[i] = rnd();
+};
+function dustStep(dt) {
+  dCount = 0;
+  for (let i = 0; i < DN; i++) {
+    if (dL[i] <= 0) continue;
+    dL[i] -= dt; if (dL[i] <= 0) continue;
+    const o = i * 3, k = exp(-dt * dK[i]);
+    dV[o] = dV[o] * k + 0.9 * dt; dV[o + 1] = dV[o + 1] * k + dG[i] * dt; dV[o + 2] *= k;
+    dP[o] += dV[o] * dt; dP[o + 1] += dV[o + 1] * dt; dP[o + 2] += dV[o + 2] * dt;
+    const f = dL[i] / dM[i], q = dCount++ * 8, sz = dS[i] * (1 + dW[i] * (1 - f)), gy = heightAt(dP[o], dP[o + 2]) + sz * 0.75;
+    if (dP[o + 1] < gy) { dP[o + 1] = gy; if (dG[i] < -2) dL[i] = min(dL[i], 0.08); } // grains stop where they land
+    dI[q] = dP[o]; dI[q + 1] = dP[o + 1]; dI[q + 2] = dP[o + 2]; dI[q + 3] = sz;
+    dI[q + 4] = dA[i] * f * min(1, (1 - f) * 5 + 0.08); dI[q + 5] = dR[i]; dI[q + 6] = shadowAt(dP[o], dP[o + 2]); dI[q + 7] = 0;
+  }
+}
+
+// ---------------------------------------------------------------- tyre tracks: a ring buffer of short stretches laid where the wheels touch
+const KN = 2400, kI = new Float32Array(KN * 8), trackVB = device.createBuffer({ size: kI.byteLength, usage: BU.VERTEX | BU.COPY_DST });
+let kNext = 0, kUsed = 0;
+const TRK = [{ x: 0, y: 0, z: 0, on: 0 }, { x: 0, y: 0, z: 0, on: 0 }];
+// wheel w (0 rear, 1 front) is at (x, z); lay track from where it last was
+function track(w, x, z, down, half, strength) {
+  const t = TRK[w];
+  if (!down) { t.on = 0; return; }
+  const y = heightAt(x, z);
+  if (!t.on) { t.x = x; t.y = y; t.z = z; t.on = 1; return; }
+  if (hypot(x - t.x, z - t.z) < 0.3) return;
+  const o = kNext * 8; kNext = (kNext + 1) % KN; if (kUsed < KN) kUsed++;
+  kI[o] = t.x; kI[o + 1] = t.y; kI[o + 2] = t.z; kI[o + 3] = half; kI[o + 4] = x; kI[o + 5] = y; kI[o + 6] = z; kI[o + 7] = strength;
+  device.queue.writeBuffer(trackVB, o * 4, kI, o, 8);
+  t.x = x; t.y = y; t.z = z;
+}
+
+// ---------------------------------------------------------------- terrain detail levels
+// A quadtree over the endless tiling: 1 m cells near the camera, doubling with distance out to about 7 km.
+let nNodes = 0;
+const QS = new Float32Array(3 * 512);
+function selectNodes(cx, cz, fx, fz) {
+  nNodes = 0; let sp = 0;
+  const R0 = 2048, bx = floor(cx / R0), bz = floor(cz / R0);
+  for (let j = -3; j <= 3; j++) for (let i = -3; i <= 3; i++) { QS[sp++] = (bx + i) * R0; QS[sp++] = (bz + j) * R0; QS[sp++] = R0; }
+  while (sp > 0) {
+    const s = QS[--sp], z = QS[--sp], x = QS[--sp];
+    const dx = max(x - cx, 0, cx - x - s), dz = max(z - cz, 0, cz - z - s), d = hypot(dx, dz);
+    if (s > GN && d < s * 1.5) {
+      const h = s / 2;
+      QS[sp++] = x; QS[sp++] = z; QS[sp++] = h; QS[sp++] = x + h; QS[sp++] = z; QS[sp++] = h;
+      QS[sp++] = x; QS[sp++] = z + h; QS[sp++] = h; QS[sp++] = x + h; QS[sp++] = z + h; QS[sp++] = h;
+    } else {
+      // wholly behind the camera
+      if (d > 30 && (x + s / 2 - cx) * fx + (z + s / 2 - cz) * fz < -s * 0.8 - 30) continue;
+      if (nNodes >= MAXN) continue;
+      const o = nNodes++ * 4; NODES[o] = x; NODES[o + 1] = z; NODES[o + 2] = s / GN; NODES[o + 3] = 0;
+    }
+  }
+}
+
+// ---------------------------------------------------------------- render targets
+// The scene is drawn at `pix` pixels into a high-range target and scaled up to the window; frame() lowers `pix`
+// when frames run long and raises it again when there is room (the governor Abyssal Garden uses, simplified).
+const NB = 6, PIXMAX = [2560 * 1440, 1920 * 1080, 1280 * 720][LV], PIXMIN = 4e5;
+let RW = 0, RH = 0, pix = PIXMAX, targets = [], passScene, passRays, passBlur, passPost, bgDepth, bgBlur, bgPost, bloomPass = [], bloomBG = [];
+let dynT = 0, dynN = 0, dynBad = 0, dynOk = 0, dynWait = 3, refMs = 40; // refMs: the display's own frame interval, learned as the fastest average seen
+const tex = (w, h, format, usage, sampleCount = 1) => device.createTexture({ size: [w, h], format, usage, sampleCount });
+const colorAtt = (view, clear) => ({ view, loadOp: clear ? 'clear' : 'load', storeOp: 'store', clearValue: [0, 0, 0, 0] });
 function resize() {
-  DW = max(2, round(canvas.clientWidth * devicePixelRatio)); DH = max(2, round(canvas.clientHeight * devicePixelRatio));
-  const s = min(1, sqrt(pix / (DW * DH)));
-  const w = max(2, round(DW * s) & ~1), h = max(2, round(DH * s) & ~1);
-  if (w === W && h === H) return;
-  dynN = dynG = dynGN = 0; dynT = -300; // let the new size settle before measuring again
-  W = w; H = h; canvas.width = W; canvas.height = H;
-  ctx.configure({ device, format: FMT, alphaMode: 'opaque' });
+  const dpr = min(devicePixelRatio || 1, 2), dw = max(2, round(canvas.clientWidth * dpr)), dh = max(2, round(canvas.clientHeight * dpr));
+  const s = min(1, sqrt(pix / (dw * dh))), w = max(2, round(dw * s) & ~1), h = max(2, round(dh * s) & ~1);
+  if (w === RW && h === RH) return;
+  RW = canvas.width = w; RH = canvas.height = h;
   for (const t of targets) t.destroy();
-  const tMS = tex(AA > 1 ? W : 1, H, HDR, TU.RENDER_ATTACHMENT, { samples: AA }), tDp = tex(W, H, DEPTH, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING, { samples: AA });
-  const tRes = tex(W, H, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING), tRay = tex(W / 2, H / 2, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING), tRay2 = tex(W / 2, H / 2, HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING);
+  const RA = TU.RENDER_ATTACHMENT, RT = RA | TU.TEXTURE_BINDING;
+  const tMS = tex(w, h, HDR, RA, AA), tDp = tex(w, h, 'depth32float', RT, AA), tRes = tex(w, h, HDR, RT), tRay = tex(w / 2, h / 2, HDR, RT), tRay2 = tex(w / 2, h / 2, HDR, RT);
   targets = [tMS, tDp, tRes, tRay, tRay2];
   const bl = [];
-  for (let i = 0; i < NB; i++) { const t = tex(max(1, W >> (i + 1)), max(1, H >> (i + 1)), HDR, TU.RENDER_ATTACHMENT | TU.TEXTURE_BINDING); bl.push(t); targets.push(t); }
+  for (let i = 0; i < NB; i++) { const t = tex(max(1, w >> (i + 1)), max(1, h >> (i + 1)), HDR, RT); bl.push(t); targets.push(t); }
   const vDp = tDp.createView(), vRes = tRes.createView(), vRay = tRay.createView(), vRay2 = tRay2.createView(), vBl = bl.map((t) => t.createView());
-  // without anti-aliasing (Low) the scene goes straight into the resolve target, and tMS is one unused column
-  passScene = { colorAttachments: [{ view: AA > 1 ? tMS.createView() : vRes, resolveTarget: AA > 1 ? vRes : undefined, loadOp: 'clear', storeOp: AA > 1 ? 'discard' : 'store', clearValue: [0, 0, 0, 1] }],
+  passScene = { colorAttachments: [{ view: tMS.createView(), resolveTarget: vRes, loadOp: 'clear', storeOp: 'discard', clearValue: [0, 0, 0, 1] }],
     depthStencilAttachment: { view: vDp, depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'store' } };
-  passRays = { colorAttachments: [colorAtt(vRay, true)] };
-  passBlur = { colorAttachments: [colorAtt(vRay2, true)] };
-  bgBlur = device.createBindGroup({ layout: pRB.getBindGroupLayout(0), entries: [{ binding: 0, resource: vRay }] });
+  passRays = { colorAttachments: [colorAtt(vRay, true)] }; passBlur = { colorAttachments: [colorAtt(vRay2, true)] };
   passPost = { colorAttachments: [{ view: null, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] };
-  bgRays = device.createBindGroup({ layout: pRays.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubo } }, { binding: 1, resource: sRep }, { binding: 2, resource: sCmp },
-    { binding: 3, resource: tShadow.createView() }, { binding: 4, resource: tWater.createView() }, { binding: 5, resource: vDp }, { binding: 6, resource: tVol.createView() }, { binding: 7, resource: sClamp }] });
-  bgPost = device.createBindGroup({ layout: pPost.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubo } }, { binding: 1, resource: sClamp }, { binding: 2, resource: vRes },
+  bgDepth = device.createBindGroup({ layout: BGL_D, entries: [{ binding: 0, resource: vDp }] });
+  bgBlur = device.createBindGroup({ layout: pRB.getBindGroupLayout(0), entries: [{ binding: 0, resource: vRay }] });
+  bgPost = device.createBindGroup({ layout: pPost.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: UB } }, { binding: 1, resource: sClamp }, { binding: 2, resource: vRes },
     { binding: 3, resource: vRay2 }, { binding: 4, resource: vBl[0] }, { binding: 5, resource: vDp }] });
+  // bloom: down res -> b0 -> ... -> b5, then up b5 -> b4 ... -> b0, adding
+  const blitBG = (view) => device.createBindGroup({ layout: BGL_B, entries: [{ binding: 0, resource: view }, { binding: 1, resource: sClamp }] });
   bloomPass = []; bloomBG = [];
-  // down: res -> b0 -> ... -> b5 ; up: b5 -> b4 (additive) ... -> b0
   for (let i = 0; i < NB; i++) { bloomPass.push({ colorAttachments: [colorAtt(vBl[i], true)] }); bloomBG.push(blitBG(i ? vBl[i - 1] : vRes)); }
   for (let i = NB - 1; i > 0; i--) { bloomPass.push({ colorAttachments: [colorAtt(vBl[i - 1], false)] }); bloomBG.push(blitBG(vBl[i])); }
-  UB[52] = W; UB[53] = H; UB[54] = 1 / W; UB[55] = 1 / H;
-}
-resize();
-addEventListener('resize', resize);
-
-// ---------------------------------------------------------------- timing (GPU timestamp queries)
-let qs, qResolve, qRead = [], tsBegin, tsEnd;
-if (hasTS) {
-  qs = device.createQuerySet({ type: 'timestamp', count: 2 });
-  qResolve = device.createBuffer({ size: 16, usage: BU.QUERY_RESOLVE | BU.COPY_SRC });
-  for (let i = 0; i < 6; i++) {
-    const b = device.createBuffer({ size: 16, usage: BU.MAP_READ | BU.COPY_DST });
-    const o = { b, busy: false, done: null };
-    o.done = () => {
-      const a = new BigInt64Array(b.getMappedRange());
-      const ms = Number(a[1] - a[0]) / 1e6; F[GPU] = ms; b.unmap(); o.busy = false;
-      if (dynT > 0 && ms > 0 && ms < 1e3) { dynG += ms; dynGN++; }
-    };
-    qRead.push(o);
-  }
-  tsBegin = { querySet: qs, beginningOfPassWriteIndex: 0 }; tsEnd = { querySet: qs, endOfPassWriteIndex: 1 };
 }
 
-// ---------------------------------------------------------------- frame
-let hud = false;
-let kf = 0, kb = 0, kl = 0, kr = 0, ku = 0, kd = 0, ks = 0, mdx = 0, mdy = 0, lkx = 0, lky = 0, l2x = 0, l2y = 0, hN = 0, hMax = 0, hMin = 1e9, hPer = 1e9, hLate = 0, hTot = 0, tId = -1, tN = 0, tx0 = 0, ty0 = 0, tx = 0, ty = 0;
-const TANH = 0.6, NEAR = 0.1, EXPO = 0.62, RAYS = 0.54;
-const submitList = [null];
-const rowOrd = new Uint8Array(CELLS);
-// Draws the cells of a cell-sorted buffer that are in view and within [minD, maxD) (scaled by `det`, but not for the
-// terrain) as merged runs, nearest rows first.
-function drawCells(r, start, lo, hi, mar, indexed, verts, minD, maxD) {
-  const cx = F[CX], cy = F[CY], cz = F[CZ], fx = F[FX], fy = F[FY], fz = F[FZ], rx = F[RX], rz = F[RZ], ux = F[UX], uy = F[UY], uz = F[UZ];
-  const ds = indexed === 1 ? 1 : det * det;
-  const tx = TANH * W / H, hw = CELLW * 0.5, ex = hw + mar, min2 = minD * minD * ds, max2 = maxD * maxD * ds;
-  for (let k = 0; k < CELLS; k++) {
-    const rw = rowOrd[k], row = rw * CELLS, pz = OZ + (rw + 0.5) * CELLW - cz, hz = max(abs(pz) - hw, 0);
-    let run = -1;
-    for (let x = 0; x <= CELLS; x++) {
-      const c = row + x; let v = false;
-      if (x < CELLS) {
-        const l = lo[c], h = hi[c];
-        if (l <= h) {
-          const px = OX + (x + 0.5) * CELLW - cx, py = (l + h) * 0.5 - cy, ey = (h - l) * 0.5 + mar, hx = max(abs(px) - hw, 0), h2 = hx * hx + hz * hz;
-          if (h2 < max2 && h2 >= min2) {
-            const lim = px * fx + py * fy + pz * fz + ex * abs(fx) + ey * abs(fy) + ex * abs(fz);
-            if (lim >= 0 && abs(px * rx + pz * rz) - ex * (abs(rx) + abs(rz)) <= lim * tx) v = abs(px * ux + py * uy + pz * uz) - ex * (abs(ux) + abs(uz)) - ey * abs(uy) <= lim * TANH;
-          }
-        }
-      }
-      if (v) { if (run < 0) run = c; } else if (run >= 0) {
-        const a = start[run], n = start[c] - a;
-        if (n > 0) { if (indexed === 1) r.drawIndexed(n * 6, 1, a * 6, 0, nSolid); else if (indexed) r.drawIndexed(indexed.ib.length, n, indexed.i0, indexed.v0, a); else r.draw(verts, n, 0, a); }
-        run = -1;
-      }
-    }
+// ---------------------------------------------------------------- start position, camera, controls
+// start at the upwind end of the longest straight run of pan, facing down it: room to get up to speed before the dunes
+let spX = 300, spZ = 300, spBest = 0;
+for (let z = 0; z < TILE; z += 16) { let run = 0; for (let x = 0; x < TILE * 2; x += 8) { if (panAt(x, z) > 0.98) { run += 8; if (run > spBest) { spBest = run; spX = x - run + 30; spZ = z; } } else run = 0; } }
+resetBike(spX, spZ, PI / 2);
+const CAM = { x: B.x - 7, y: B.y + 2.5, z: B.z, yaw: PI / 2 + 0.6 };
+let playing = false, tLast = performance.now(), tNow = 0, acc = 0, hudT = 0, airMax = 0, airShow = 0, airText = '', bikeSh = 1, score = 0, bestAir = 0, benching = false, benchT = 0, benchDone = null, camDrop = 0, camDropV = 0, shk = 0, finUp = 0, prox = 0, proxD = -1, bones = 0, wasBones = 0, devAcc = 0, cdAcc = 0;
+try { bones = +localStorage.duneBones || 0; } catch {}
+try { bestAir = +localStorage.duneBestAir || 0; } catch {}
+const elScore = $('j'), elFuel = $('n'), elFuelBox = $('o'), benchF = [];
+const STEP = 1 / 240, K = {};
+// first-person view by default; the clock starts at the player's local time
+const d0 = new Date(), RATES = [60, 600, 0, 1], RATE_NAMES = ['1 hour a minute', '1 hour every 6 s', 'time paused', 'real time'];
+let pov = true, hour = d0.getHours() + d0.getMinutes() / 60, tRate = 0, skyHour = -99, skyDirty = true, expo = -1, camPitch = 0, camRoll = 0, noteT = 0, note = '';
+let dbgFov = 0; // set from the console (DUNE.fov) for a telephoto look at the bike
+const say = (t) => { note = '   ' + t; noteT = 2.5; };
+const pause = () => { playing = false; body.className = 'm'; elGo.textContent = 'Resume'; };
+elGo.onclick = () => { sound(); playing = true; body.className = 'g'; elGo.blur(); };
+addEventListener('keydown', (e) => {
+  K[e.code] = 1;
+  if (e.code === 'Escape' && playing) pause();
+  else if (e.code === 'Enter' && !playing && body.className === 'm') elGo.onclick();
+  else if (e.code === 'KeyR' && playing) resetBike(B.x, B.z, B.yaw);
+  else if (e.code === 'KeyF' && playing && !e.repeat && B.crash <= 0) { // first press: main wings; second: the lower pair as well; third: all away
+    if (!B.wingOn) { B.wingOn = 1; B.flapOn = 0; } else if (!B.flapOn) B.flapOn = 1; else { B.wingOn = 0; B.flapOn = 0; }
+    soundWings(B.wingOn); say(!B.wingOn ? 'wings away' : B.flapOn ? 'second wings out' : 'wings out'); }
+  else if (e.code === 'KeyM') muted = !muted;
+  else if ((e.code === 'KeyZ' || e.code === 'KeyX') && playing) { B.trim = clamp(B.trim + (e.code === 'KeyZ' ? 0.012 : -0.012), -0.084, 0.108); say('trim ' + (B.trim > 0.001 ? 'nose up ' : B.trim < -0.001 ? 'nose down ' : 'level ') + abs(round(B.trim / 0.012))); }
+  else if (e.code === 'KeyC') { pov = !pov; say(pov ? 'rider view' : 'chase view'); }
+  else if (e.code === 'KeyT') { tRate = (tRate + 1) % RATES.length; say(RATE_NAMES[tRate]); }
+  else if (e.code === 'BracketRight') hour = (hour + 1) % 24;
+  else if (e.code === 'BracketLeft') hour = (hour + 23) % 24;
+  if (playing && (e.code.startsWith('Arrow') || e.code === 'Space')) e.preventDefault();
+});
+addEventListener('keyup', (e) => { K[e.code] = 0; });
+addEventListener('blur', () => { for (const k in K) K[k] = 0; if (playing) pause(); });
+function readInput() {
+  let thr = K.KeyW || K.ArrowUp ? 1 : 0, brk = K.KeyS || K.ArrowDown || K.Space ? 1 : 0, st = (K.KeyD || K.ArrowRight ? 1 : 0) - (K.KeyA || K.ArrowLeft ? 1 : 0);
+  const gp = navigator.getGamepads ? navigator.getGamepads()[0] : null;
+  if (gp) {
+    thr = max(thr, gp.buttons[7] ? gp.buttons[7].value : 0); brk = max(brk, gp.buttons[6] ? gp.buttons[6].value : 0);
+    if (abs(gp.axes[0]) > 0.12) st = clamp(st + gp.axes[0], -1, 1);
   }
-}
-function render() {
-  // camera basis (right vector is horizontal)
-  const cx = F[CX], cy = F[CY], cz = F[CZ], pitch = F[PIT], yaw = F[YAW];
-  const cp = cos(pitch), fy = sin(pitch), rx = cos(yaw), rz = sin(yaw), fx = cp * rz, fz = -cp * rx;
-  const ux = -rz * fy, uy = rz * fx - rx * fz, uz = rx * fy;
-  F[FX] = fx; F[FY] = fy; F[FZ] = fz; F[RX] = rx; F[RZ] = rz; F[UX] = ux; F[UY] = uy; F[UZ] = uz;
-  const asp = W / H, sx = 1 / (TANH * asp), sy = 1 / TANH, m = UB;
-  m[0] = rx * sx; m[4] = 0; m[8] = rz * sx; m[12] = -(rx * cx + rz * cz) * sx;
-  m[1] = ux * sy; m[5] = uy * sy; m[9] = uz * sy; m[13] = -(ux * cx + uy * cy + uz * cz) * sy;
-  m[2] = 0; m[6] = 0; m[10] = 0; m[14] = NEAR;
-  m[3] = fx; m[7] = fy; m[11] = fz; m[15] = -(fx * cx + fy * cy + fz * cz);
-  m[32] = cx; m[33] = cy; m[34] = cz; m[35] = F[TIME];
-  m[36] = rx; m[37] = 0; m[38] = rz; m[39] = TANH * asp;
-  m[40] = ux; m[41] = uy; m[42] = uz; m[43] = TANH;
-  m[44] = fx; m[45] = fy; m[46] = fz; m[47] = NEAR;
-  const zx = cx - PURPLE[0], zz = cz - PURPLE[1]; let zt = (44 - sqrt(zx * zx + zz * zz)) / 18; zt = zt < 0 ? 0 : zt > 1 ? 1 : zt;
-  m[51] = zt * zt * (3 - 2 * zt);
-  let ek = (-cy - 8) / 26; ek = ek < 0 ? 0 : ek > 1 ? 1 : ek;
-  m[56] = EXPO * (0.6 + 0.4 * ek); m[57] = RAYS; m[58] = det;
-  Q.writeBuffer(ubo, 0, UB);
-  WT[0] = F[TIME]; Q.writeBuffer(uboW, 0, WT);
-
-  { let cr = floor((cz - OZ) / CELLW) | 0; cr = cr < 0 ? 0 : cr > CELLS - 1 ? CELLS - 1 : cr; let n = 0; rowOrd[n++] = cr; for (let d = 1; d < CELLS; d++) { if (cr - d >= 0) rowOrd[n++] = cr - d; if (cr + d < CELLS) rowOrd[n++] = cr + d; } }
-  const e = device.createCommandEncoder();
-  let slot = null;
-  if (hasTS) { for (let i = 0; i < qRead.length; i++) if (!qRead[i].busy) { slot = qRead[i]; break; } }
-  waterPass[0].timestampWrites = slot ? tsBegin : undefined;
-  passPost.timestampWrites = slot ? tsEnd : undefined;
-  // animated water texture + mips
-  let r = e.beginRenderPass(waterPass[0]); r.setPipeline(pWater); r.setBindGroup(0, bgWater); r.draw(3); r.end();
-  for (let i = 1; i < 5; i++) { r = e.beginRenderPass(waterPass[i]); r.setPipeline(pMip16); r.setBindGroup(0, waterBG[i - 1]); r.draw(3); r.end(); }
-  // scene
-  r = e.beginRenderPass(passScene);
-  r.setBindGroup(0, bg0);
-  r.setPipeline(pTerrain); r.setVertexBuffer(0, vbTerrain); r.setVertexBuffer(1, ibSolids); r.setIndexBuffer(ibTerrain, 'uint32');
-  drawCells(r, T.start, T.lo, T.hi, 1.5, 1, 0, 0, 240);
-  r.setPipeline(pSolid); r.setVertexBuffer(0, vbMesh); r.setIndexBuffer(ibMesh, 'uint32');
-  for (let i = 0; i < 12; i++) { const g = Wd.solids.ranges[i]; if (g[1]) r.drawIndexed(meshes[i].ib.length, g[1], meshes[i].i0, meshes[i].v0, g[0]); }
-  for (let i = 0; i < NCHUNK; i++) {
-    const c = Wd.chunks[i], big = i > 2 && i < 6; r.setVertexBuffer(1, ibChunk[i]);
-    drawCells(r, c.start, c.lo, c.hi, 3, meshes[14 + i], 0, 0, i > 5 ? 30 : big ? 40 : 96);
-    if (big) drawCells(r, c.start, c.lo, c.hi, 3, meshes[20 + i], 0, 40, 150);
+  IN.thr = thr; IN.brk = brk; IN.steer = st;
+  // rider weight: I forward, K back; the right stick on a gamepad
+  IN.lean = clamp((K.KeyI ? 1 : 0) - (K.KeyK ? 1 : 0) + (gp && abs(gp.axes[3]) > 0.2 ? -gp.axes[3] : 0), -1, 1);
+  // tail fin: Q swings the nose left, E right; the shoulder buttons on a gamepad
+  IN.yaw = clamp((K.KeyE ? 1 : 0) - (K.KeyQ ? 1 : 0) + (gp ? (gp.buttons[5] && gp.buttons[5].pressed ? 1 : 0) - (gp.buttons[4] && gp.buttons[4].pressed ? 1 : 0) : 0), -1, 1);
+  IN.boost = K.ShiftLeft || K.ShiftRight || (gp && gp.buttons[0] && gp.buttons[0].pressed) ? 1 : 0;
+  if (benching) {
+    // the scripted ride: flat out, weaving, a boost and a glide, half in each view
+    const w = sin(benchT * 0.9); IN.thr = B.wingOn ? 0 : 1; IN.brk = 0; IN.steer = w > 0.6 ? 1 : w < -0.6 ? -1 : 0;
+    IN.boost = (benchT > 6 && benchT < 8) || (benchT > 17 && benchT < 19) ? 1 : 0; IN.yaw = 0; IN.lean = 0; B.wingOn = B.air > 0.5 ? 1 : B.air === 0 ? 0 : B.wingOn; pov = benchT < 15;
   }
-  for (let i = 0; i < 6; i++) {
-    const lod = i === 3 || i === 4; r.setVertexBuffer(1, ibProp[i]);
-    drawCells(r, Wd.props[i].start, Wd.props[i].lo, Wd.props[i].hi, 3, meshes[4 + i], 0, 0, lod ? 6 : 110);
-    if (lod) drawCells(r, Wd.props[i].start, Wd.props[i].lo, Wd.props[i].hi, 3, meshes[18 + i], 0, 6, 110);
-  }
-  r.setPipeline(pManta); r.setVertexBuffer(1, ibManta); r.drawIndexed(MANTA.ib.length, nManta, MANTA.i0, MANTA.v0, 0);
-  r.setPipeline(pFish); r.setVertexBuffer(1, ibFish); r.drawIndexed(FISH.ib.length, nFish, FISH.i0, FISH.v0, 0);
-  // kelp and plants: 9-row blades up close, 5 rows mid-range, a decimated set far away
-  r.setPipeline(pLeaf); r.setVertexBuffer(0, ibBig); drawCells(r, Wd.big.start, Wd.big.lo, Wd.big.hi, 5, false, 18, 0, 24);
-  r.setPipeline(pLeaf5); drawCells(r, Wd.big.start, Wd.big.lo, Wd.big.hi, 5, false, 10, 24, 58);
-  r.setPipeline(pLeafF); r.setVertexBuffer(0, ibBigF); drawCells(r, Wd.bigF.start, Wd.bigF.lo, Wd.bigF.hi, 5, false, 6, 58, 150);
-  r.setPipeline(pLeafS); r.setVertexBuffer(0, ibSmall); drawCells(r, Wd.small.start, Wd.small.lo, Wd.small.hi, 1.5, false, 6, 0, 70);
-  r.setPipeline(pSurf); r.draw(4);
-  r.setPipeline(pBack); r.draw(4);
-  r.setPipeline(pBub); r.setVertexBuffer(0, ibBubbles); r.draw(4, nBub);
-  r.setPipeline(pGl); r.setVertexBuffer(0, ibGl); r.draw(4, nGl);
-  r.setPipeline(pSnow); r.setVertexBuffer(0, ibSnowB); r.draw(4, nSnow);
-  r.end();
-  // light shafts
-  r = e.beginRenderPass(passRays); r.setPipeline(pRays); r.setBindGroup(0, bgRays); r.draw(3); r.end();
-  r = e.beginRenderPass(passBlur); r.setPipeline(pRB); r.setBindGroup(0, bgBlur); r.draw(3); r.end();
-  // bloom
-  for (let i = 0; i < bloomPass.length; i++) {
-    r = e.beginRenderPass(bloomPass[i]); r.setPipeline(i === 0 ? pDown0 : i < NB ? pDown : pUp); r.setBindGroup(0, bloomBG[i]); r.draw(3); r.end();
-  }
-  // composite
-  passPost.colorAttachments[0].view = ctx.getCurrentTexture().createView();
-  r = e.beginRenderPass(passPost); r.setPipeline(pPost); r.setBindGroup(0, bgPost); r.draw(3); r.end();
-  if (slot) { e.resolveQuerySet(qs, 0, 2, qResolve, 0); e.copyBufferToBuffer(qResolve, 0, slot.b, 0, 16); }
-  submitList[0] = e.finish();
-  Q.submit(submitList);
-  if (slot) { slot.busy = true; slot.b.mapAsync(GPUMapMode.READ).then(slot.done); }
 }
 
-// CS[j] = distance to the rock (metres, < 0 in water) at the camera + CE[3j..3j+2]: the camera, then ±0.375 m on
-// each axis for the gradient
-const CE = new Float64Array([0, 0, 0, .375, 0, 0, -.375, 0, 0, 0, .375, 0, 0, -.375, 0, 0, 0, .375, 0, 0, -.375]), CS = new Float64Array(7);
-const cv = (x, y, z) => { const b = CI[(x >> 2) + CN * ((y >> 2) + NY / 4 * (z >> 2))]; return b > 1 ? CG[b * 64 - 128 + (x & 3) + 4 * (y & 3) + 16 * (z & 3)] : b * 254 - 127; };
-function sd(j) {
-  const x = (F[CX] + CE[j * 3] - OX) / VS - CO, y = (F[CY] + CE[j * 3 + 1] - OY) / VS, z = (F[CZ] + CE[j * 3 + 2] - OZ) / VS - CO;
-  const ix = x | 0, iy = y | 0, iz = z | 0, u = x - ix, v = y - iy, a = cv(ix, iy, iz), b = cv(ix, iy + 1, iz), c = cv(ix, iy, iz + 1), d = cv(ix, iy + 1, iz + 1);
-  const p = a + (cv(ix + 1, iy, iz) - a) * u, q = b + (cv(ix + 1, iy + 1, iz) - b) * u, r = c + (cv(ix + 1, iy, iz + 1) - c) * u, s = d + (cv(ix + 1, iy + 1, iz + 1) - d) * u;
-  const e = p + (q - p) * v; CS[j] = (e + (r + (s - r) * v - e) * (z - iz)) / 127;
+const MB = new Float32Array(16), MT = new Float32Array(16), MT2 = new Float32Array(16), MT3 = new Float32Array(16);
+const MW1 = new Float32Array(16), MW2 = new Float32Array(16), MW3 = new Float32Array(16), MW4 = new Float32Array(16);
+// ---- rider posing
+const MR = new Float32Array(16), JT = [0, 0, 0];
+let rStand = 0, rBack = 0, rCrouch = 0, rough = 0, cFp = 0, cRp = 0;
+// two-bone joint: from root R to target T with bone lengths a and b, bending toward the pole direction; result in JT
+function ik(rx, ry, rz, tx, ty, tz, a, b, px, py, pz) {
+  let dx = tx - rx, dy = ty - ry, dz = tz - rz; const d0 = hypot(dx, dy, dz) || 1e-3, d = clamp(d0, abs(a - b) + 0.01, a + b - 0.005);
+  dx /= d0; dy /= d0; dz /= d0;
+  const ca = (a * a + d * d - b * b) / (2 * a * d), al = a * ca, h = a * sqrt(max(1 - ca * ca, 0)), k = px * dx + py * dy + pz * dz;
+  let qx = px - dx * k, qy = py - dy * k, qz = pz - dz * k; const ql = 1 / (hypot(qx, qy, qz) || 1);
+  JT[0] = rx + dx * al + qx * ql * h; JT[1] = ry + dy * al + qy * ql * h; JT[2] = rz + dz * al + qz * ql * h;
 }
-// Moves the camera by F[MX..MZ] in steps shorter than its radius CR (so it can't pass through thin rock), pushing it
-// back out after each step and dropping velocity into the rock, so it slides along.
-const CR = 0.5;
-function collide() {
-  const n = floor(sqrt(F[MX] * F[MX] + F[MY] * F[MY] + F[MZ] * F[MZ]) / 0.4) + 1;
-  for (let i = 0; i < n; i++) {
-    F[CX] += F[MX] / n; F[CY] += F[MY] / n; F[CZ] += F[MZ] / n;
-    for (let k = 0; k < 2; k++) {
-      sd(0); const s = CS[0] + CR; if (s <= 0) break;
-      for (let j = 1; j < 7; j++) sd(j);
-      let gx = CS[1] - CS[2], gy = CS[3] - CS[4], gz = CS[5] - CS[6]; const l = sqrt(gx * gx + gy * gy + gz * gz);
-      if (l < 0.075) break; // flat: deep in rock
-      gx /= l; gy /= l; gz /= l; const vn = F[VX] * gx + F[VY] * gy + F[VZ] * gz;
-      F[CX] -= gx * s; F[CY] -= gy * s; F[CZ] -= gz * s;
-      if (vn > 0) { F[VX] -= gx * vn; F[VY] -= gy * vn; F[VZ] -= gz * vn; }
-    }
-  }
+// stretch a unit limb segment from (x0,y0,z0) to (x1,y1,z1), in the frame `base`
+function seg(part, base, x0, y0, z0, x1, y1, z1) {
+  const fx = x1 - x0, fy = y1 - y0, fz = z1 - z0; let l = hypot(fx, fz), rx = 1, rz = 0;
+  if (l > 1e-4) { rx = fz / l; rz = -fx / l; }
+  let ux = fy * rz, uy = fz * rx - fx * rz, uz = -fy * rx; l = 1 / (hypot(ux, uy, uz) || 1);
+  mBasis(MT3, rx, 0, rz, ux * l, uy * l, uz * l, fx, fy, fz, x0, y0, z0); mMul(part.mat, base, MT3);
 }
+const lumOf = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 
 function frame(now) {
   requestAnimationFrame(frame);
-  const dtr = now - F[LAST]; F[LAST] = now;
-  let dt = dtr / 1000; if (dt > 0.1) dt = 0.1;
-  // Dynamic resolution for 60 fps: every second (0.4 s behind the menu) scale the load by k
-  if (dtr < 1e3 && (dynT += dtr) > 0 && (dynN++, dynT > (menu ? 400 : 1000))) {
-    const a = dynT / dynN, g = dynGN ? dynG / dynGN : 0; let k = 1;
-    // with GPU timing: keep it between 9.8 and 13.6 ms
-    if (g) { if (g > 13.6 || g < 9.8) k = 11.7 / g; }
-    // without: slow for two periods in a row means fewer pixels, and twice as long before trying to go back up
-    else if (a > 17.6) { dynOk = 0; if (++dynBad > 1) { k = 15 / a; dynBad = 0; dynWait = min(dynWait * 2, 60); } }
-    // at the display's rate there is no telling if there is room, so try a little more now and then
-    else { dynBad = 0; if (a < 12.5) k = 15 / a; else if (++dynOk > dynWait) { k = 1.17; dynOk = 0; } }
-    k = k < 0.5 ? 0.5 : k > 1.7 ? 1.7 : k; const top = min(PIXMAX, DW * DH), mid = max(top / 2, PIXMIN), was = pix + det;
-    // too slow: pixels down to `mid` first, then draw distance, then the remaining pixels; faster goes back the same way
-    if (k < 1 ? pix > mid || det <= DETMIN : pix < mid || det >= 1) {
-      const end = k < 1 ? (det > DETMIN ? mid : PIXMIN) : det < 1 ? mid : top;
-      pix *= k; if (k < 1 ? pix < end : pix > end) pix = end;
-    } else { det *= sqrt(k); det = det < DETMIN ? DETMIN : det > 1 ? 1 : det; }
-    if (was !== pix + det) keep('abyssal', [LV, pix < top ? pix | 0 : '', det]); // nothing kept at full resolution
-    dynN = dynT = dynG = dynGN = 0; resize();
+  const dtr = now - tLast, dt = min(dtr / 1000, 0.05); tLast = now; tNow += dt;
+  // hold the frame rate: slow for two seconds running means fewer pixels; smooth for a while means try more
+  // (it runs behind the menu too, on a shorter cycle, so the picture has settled before the ride starts)
+  if (dtr < 200 && !benching && (dynT += dtr, ++dynN, dynT > (playing ? 1000 : 400))) {
+    const a = dynT / dynN; let k = 1;
+    // "slow" means slower than both 60 fps and the display itself: a 50 Hz screen running at 50 is not slow
+    refMs = min(refMs + 0.02, a);
+    if (a > max(17.6, refMs * 1.15)) { dynOk = 0; if (++dynBad > 1) { k = max(0.6, 15 / a); dynBad = 0; dynWait = min(dynWait * 2, 60); } }
+    else { dynBad = 0; if (++dynOk > dynWait) { k = 1.17; dynOk = 0; } }
+    pix = clamp(pix * k, PIXMIN, PIXMAX); dynT = dynN = 0;
   }
-  F[TIME] += dt;
+  resize();
+  if (playing) readInput(); else { IN.thr = 0; IN.steer = 0; IN.brk = 1; IN.boost = 0; }
+  if (benching) { benchF.push(dtr); benchT += dt; if (benchT > 30 && benchDone) { const d = benchDone; benchDone = null; d(); } }
+  acc += dt; while (acc >= STEP) { stepBike(STEP); acc -= STEP; }
+  soundUpdate(dt, playing);
+
+  // ---- time of day: move the sun, relight, adapt the exposure like an eye or a camera would
+  if (RATES[tRate]) hour = (hour + dt * RATES[tRate] / 3600) % 24;
+  if (abs(hour - skyHour) > 1e-4) { skyHour = hour; setSun(hour); skyLight(); skyDirty = true; }
+  const sunUp = max(SUN[1], 0.38), lum = (0.2126 * SAND[0] * (SUNC[0] * sunUp + AMB[0]) + 0.7152 * SAND[1] * (SUNC[1] * sunUp + AMB[1]) + 0.0722 * SAND[2] * (SUNC[2] * sunUp + AMB[2])) / PI;
+  const expoT = min(8, 0.34 / lum * pow(lum / 0.9, 0.15));
+  expo = expo < 0 ? expoT : expo + (expoT - expo) * min(1, dt * 2.5);
+  const night = 1 - sstep(-0.1, 0.02, SUN[1]);
+
+  // ---- bike basis
+  const sy = sin(B.yaw), cy = cos(B.yaw), sp = sin(B.pitch), cp = cos(B.pitch);
+  const fX = sy * cp, fY = sp, fZ = cy * cp, uX = -sy * sp, uY = cp, uZ = -cy * sp, rX = cy, rZ = -sy;
+  // lean about the tyre contact line; lying on its side after a crash
+  const ln = B.crash > 0 ? 1.35 * min(1, B.ct * 5) * (B.lean < 0 ? -1 : 1) : B.lean, cl = cos(ln), sl = sin(ln), hc = 0.67;
+  const u2X = uX * cl + rX * sl, u2Y = uY * cl, u2Z = uZ * cl + rZ * sl, r2X = rX * cl - uX * sl, r2Y = -uY * sl, r2Z = rZ * cl - uZ * sl;
+  mBasis(MB, r2X, r2Y, r2Z, u2X, u2Y, u2Z, fX, fY, fZ, B.x + hc * (u2X - uX), B.y + hc * (u2Y - uY), B.z + hc * (u2Z - uZ));
+  pChassis.mat.set(MB);
+  mRot(MT, FAX[0], FAX[1], FAX[2], B.steer, HEAD[0], HEAD[1], HEAD[2], 0, 0, 0); mMul(pForkU.mat, MB, MT);
+  // ---- wings. Each side unfolds in order: the root section flips up and out from the front of the bike, then the
+  // middle and tip sections open like a folding rule. The tail fins swing up off the rear fender.
   {
-    // touch: holding the finger away from where it went down keeps turning, like a joystick
-    if (tId >= 0) {
-      const tr = 4 / (innerWidth < innerHeight ? innerWidth : innerHeight); let jx = (tx - tx0) * tr, jy = (ty - ty0) * tr;
-      jx = jx > 1 ? 1 : jx < -1 ? -1 : jx; jy = jy > 1 ? 1 : jy < -1 ? -1 : jy;
-      lkx += jx * 1.5 * dt; lky += jy * dt;
+    const wg = B.wing, e1 = sstep(0, 0.5, wg), e2 = sstep(0.28, 0.68, wg), e3 = sstep(0.35, 0.8, wg), e4 = sstep(0.55, 1, wg) * (1 - 0.93 * B.fold); // (overloaded, the tip sections fold back)
+    for (let k = 0; k < 2; k++) {
+      const sd = k ? -1 : 1, W = WINGS[k];
+      // root section: stowed it hangs beside the front wheel like a leg shield; it flips up and out from a hinge on
+      // the frame just behind the steering head, swept a little forward so the rider sees the wings ahead of him
+      mRot(MW3, 0, 1, 0, -sd * 0.22 * e1, 0, 0, 0, sd * 0.25, 0.3, 0.52);
+      mRot(MW2, 0, 0, 1, sd * (0.08 * e1 - 1.5708 * (1 - e1)), 0, 0, 0, 0, 0, 0); mMul(MW1, MW3, MW2); mMul(W[0].mat, MB, MW1);
+      mRot(MW2, 0, 0, 1, sd * 3.08 * (1 - e3), 0, 0, 0, sd * 0.8, 0.04, 0); mMul(MW3, MW1, MW2); mMul(W[1].mat, MB, MW3);
+      mRot(MW2, 0, 0, 1, -sd * 3.08 * (1 - e4), 0, 0, 0, sd * 0.9, -0.04, 0); mMul(MW4, MW3, MW2); mMul(W[2].mat, MB, MW4);
+      mRot(MW1, 0, 1, 0, sd * mix(1.5708, 0.5, e1), 0, 0, 0, sd * 0.085, 0.41, -0.98);
+      mRot(MW2, 0, 0, 1, sd * 0.75 * e2, 0, 0, 0, 0, 0, 0); mMul(MW3, MW1, MW2);
+      mRot(MW2, 1, 0, 0, 1.5708 * (1 - e2), 0, 0, 0, 0, 0, 0); mMul(MW1, MW3, MW2); mMul(W[3].mat, MB, MW1);
     }
-    // mouse look through two cascaded low-pass stages
-    const kq = 1 - exp(-dt * 30); lkx += mdx * 0.0022; lky += mdy * 0.0022; mdx = 0; mdy = 0;
-    const ax = lkx * kq, ay = lky * kq; lkx -= ax; lky -= ay; l2x += ax; l2y += ay;
-    const dyw = l2x * kq, dpt = l2y * kq; l2x -= dyw; l2y -= dpt;
-    const yaw = F[YAW] + dyw; let pitch = F[PIT] - dpt; pitch = pitch < -1.55 ? -1.55 : pitch > 1.55 ? 1.55 : pitch;
-    const sp = ks || tN > 1 ? 26 : 7, k = 1 - exp(-dt * 4.5), mf = tId >= 0 ? 0.7 : kf - kb, mr = kr - kl, mu = ku - kd, cp = cos(pitch), sy = sin(yaw), cw = cos(yaw);
-    const vx = F[VX] + ((sy * cp * mf + cw * mr) * sp - F[VX]) * k, vy = F[VY] + ((sin(pitch) * mf + mu) * sp - F[VY]) * k, vz = F[VZ] + ((-cw * cp * mf + sy * mr) * sp - F[VZ]) * k;
-    let x = F[CX] + vx * dt, y = F[CY] + vy * dt, z = F[CZ] + vz * dt;
-    const rad = sqrt(x * x + z * z); if (rad > 150) { x *= 150 / rad; z *= 150 / rad; }
-    y = y < -52 ? -52 : y > -1.2 ? -1.2 : y;
-    F[YAW] = yaw; F[PIT] = pitch; F[VX] = vx; F[VY] = vy; F[VZ] = vz; F[MX] = x - F[CX]; F[MY] = y - F[CY]; F[MZ] = z - F[CZ];
-    collide();
   }
-  render();
-  if (hud) {
-    hN++; if (dtr > hMax) hMax = dtr; if (dtr < hMin) hMin = dtr; if (dtr > hPer * 1.5) { hLate++; hTot++; }
-    F[HUDT] += dtr / 1000;
-    if (F[HUDT] > 0.5) { info.textContent = `${(hN / F[HUDT]).toFixed(0)} fps  ·  worst frame ${hMax.toFixed(1)} ms  ·  late frames ${hLate} (total ${hTot})  ·  GPU ${F[GPU].toFixed(2)} ms  ·  ${W}x${H} (${W * 100 / DW | 0}%)`; F[HUDT] = 0; hPer = hMin; hN = 0; hMax = 0; hMin = 1e9; hLate = 0; }
+  // ---- lower wings: stowed they lie back beside the rear wheel with the tip section folded over; they swing forward and out, then the tip opens
+  {
+    const e1 = sstep(0, 0.6, B.flap), e2 = sstep(0.4, 1, B.flap) * (1 - 0.93 * B.fold);
+    for (let k = 0; k < 2; k++) {
+      const sd = k ? -1 : 1;
+      mRot(MW1, 0, 1, 0, sd * (1.5708 * (1 - e1) + 0.1 * e1), 0, 0, 0, sd * 0.2, -0.02, -0.22);
+      mRot(MW2, 0, 0, 1, -sd * 0.07 * e1, 0, 0, 0, 0, 0, 0); mMul(MW3, MW1, MW2); mMul(PARTS[26 + k * 2].mat, MB, MW3);
+      mRot(MW2, 0, 0, 1, sd * 3.08 * (1 - e2), 0, 0, 0, sd * 0.7, 0.04, 0); mMul(MW1, MW3, MW2); mMul(PARTS[27 + k * 2].mat, MB, MW1);
+    }
+  }
+  // ---- tail fin: lies back along the rear fender on the ground, stands up once the bike is in the air, and swings with the rudder
+  finUp += clamp((B.air > 0.12 || B.wdep > 0.3 ? 1 : 0) - finUp, -dt * 3, dt * 5);
+  mRot(MW1, 0, 0, 1, 1.5708, 0, 0, 0, 0, 0.44, -1.0);
+  mRot(MW2, 0, 1, 0, -B.wy * 0.55, 0, 0.44, -0.86, 0, 0, 0); mMul(MW3, MW2, MW1);
+  mRot(MW2, 1, 0, 0, -1.32 * (1 - sstep(0, 1, finUp)), 0, 0.44, -0.86, 0, 0, 0); mMul(MW1, MW2, MW3); mMul(pRudder.mat, MB, MW1);
+  // ---- rocket flames: stretched with the thrust, with a flutter in their length
+  for (let k = 0; k < 2; k++) {
+    const len = B.bst * (0.95 + 0.25 * sin(tNow * 47 + k * 2.1) + 0.1 * sin(tNow * 113));
+    mBasis(MW1, 1, 0, 0, 0, 1, 0, 0, 0, max(len, 0.001), (k ? -1 : 1) * NOZ[0], NOZ[1], NOZ[2]); mMul(PARTS[23 + k].mat, MB, MW1);
+  }
+  // ---- rider: how he sits follows what the bike is doing
+  const crashed = B.crash > 0;
+  rough += (min(1, abs(B.q) * 0.5 + (abs(B.cF - cFp) + abs(B.cR - cRp)) / max(dt, 0.004) * 0.35) - rough) * min(1, dt * 3); cFp = B.cF; cRp = B.cR;
+  // up on the pegs over rough ground, at speed and in the air; down in the seat for turns
+  const standT = B.air > 0.05 ? 1 : clamp(sstep(0.1, 0.45, rough) + sstep(13, 26, B.speed) * 0.6 - sstep(0.2, 0.5, abs(B.lean)) * 0.8, 0, 1);
+  rStand += (standT - rStand) * min(1, dt * 4);
+  // weight back on drops and under braking, forward under power
+  rBack += (clamp(-B.pitch * 1.1 + IN.brk * 0.5 - B.thr * 0.35 + (B.air > 0.2 ? 0.25 : 0) - IN.lean * 0.6, -0.6, 1) - rBack) * min(1, dt * 5);
+  // legs soak up a landing
+  if (min(B.land, 1) > rCrouch) rCrouch = min(B.land, 1);
+  if (B.pre * 0.8 > rCrouch) rCrouch = B.pre * 0.8; // winding up for a jump
+  rCrouch *= exp(-dt * 3.2);
+  let RB = MB, pY = 0.44 + 0.13 * rStand - 0.11 * rCrouch, pZ = -0.31 + 0.11 * rStand - 0.13 * rBack, phi = 0.74 - 0.2 * rStand + 0.15 * rBack + 0.12 * rCrouch, rl = -ln * 0.4;
+  if (crashed) {
+    // thrown clear and tumbling head over heels along the way he is going
+    const ry = sin(RD.yaw), rc = cos(RD.yaw), ca = cos(RD.a), sa = sin(RD.a), Ux = ry * ca, Uy = sa, Uz = rc * ca, Fx = ry * sa, Fy = -ca, Fz = rc * sa;
+    mBasis(MR, rc, 0, -ry, Ux, Uy, Uz, Fx, Fy, Fz, RD.x - Ux * 0.7 - Fx * 0.1, RD.y - Uy * 0.7 - Fy * 0.1, RD.z - Uz * 0.7 - Fz * 0.1);
+    RB = MR; pY = 0.44; pZ = -0.31; phi = 0.12; rl = 0;
+  }
+  // spine direction, then a right and forward axis square to it
+  let sx = sin(rl), sy2 = cos(phi), sz = sin(phi), il = 1 / hypot(sx, sy2, sz); sx *= il; sy2 *= il; sz *= il;
+  let tx0 = 1 - sx * sx, ty0 = -sx * sy2, tz0 = -sx * sz; il = 1 / hypot(tx0, ty0, tz0); tx0 *= il; ty0 *= il; tz0 *= il;
+  const wx = ty0 * sz - tz0 * sy2, wy = tz0 * sx - tx0 * sz, wz = tx0 * sy2 - ty0 * sx;
+  mBasis(MT2, tx0, ty0, tz0, sx, sy2, sz, wx, wy, wz, 0, pY, pZ); mMul(pTorso.mat, RB, MT2);
+  // helmet stays level while the bike pitches under it
+  mRot(MT2, 1, 0, 0, crashed ? 0.3 : clamp(B.pitch * 0.5, -0.5, 0.5) + 0.06, 0, 0, 0, sx * 0.575 + wx * 0.02, pY + sy2 * 0.575 + wy * 0.02, pZ + sz * 0.575 + wz * 0.02); mMul(pHelmet.mat, RB, MT2);
+  for (let sd = -1; sd <= 1; sd += 2) {
+    const L = sd < 0, shx = tx0 * 0.2 * sd + sx * 0.425, shy = pY + ty0 * 0.2 * sd + sy2 * 0.425, shz = pZ + tz0 * 0.2 * sd + sz * 0.425;
+    const fl = crashed ? min(1, hypot(RD.vx, RD.vy, RD.vz) / 8) : 0; // arms and legs fly about while he is still moving
+    let hx = shx + sd * (0.1 + 0.25 * fl * sin(RD.a * 1.7 + sd)), hy = shy + 0.28, hz = shz + 0.3 + 0.3 * fl * cos(RD.a * 1.3 + sd * 2);
+    if (!crashed) { const gx = sd * GRIP[0]; hx = MT[0] * gx + MT[4] * GRIP[1] + MT[8] * GRIP[2] + MT[12]; hy = MT[1] * gx + MT[5] * GRIP[1] + MT[9] * GRIP[2] + MT[13]; hz = MT[2] * gx + MT[6] * GRIP[1] + MT[10] * GRIP[2] + MT[14]; }
+    // elbows up and out
+    ik(shx, shy, shz, hx, hy, hz, 0.27, 0.3, sd * 0.85, 0.4, -0.3);
+    seg(L ? pUarmL : pUarmR, RB, shx, shy, shz, JT[0], JT[1], JT[2]); seg(L ? pArmL : pArmR, RB, JT[0], JT[1], JT[2], hx, hy, hz);
+    const hpx = tx0 * 0.115 * sd, hpy = pY + ty0 * 0.115 * sd, hpz = pZ + tz0 * 0.115 * sd;
+    let ax = sd * 0.205, ay = -0.2, az = -0.09;
+    if (crashed) { ax = hpx + sd * 0.06; ay = hpy - 0.82 + 0.22 * fl * (1 + sin(RD.a * 1.9 + sd)); az = hpz + 0.08 + 0.2 * fl * sin(RD.a * 1.1 + sd * 2); }
+    // knees forward, gripping the bike
+    ik(hpx, hpy, hpz, ax, ay, az, 0.47, 0.42, sd * 0.28, 0.35, 1);
+    seg(L ? pThighL : pThighR, RB, hpx, hpy, hpz, JT[0], JT[1], JT[2]); seg(L ? pShinL : pShinR, RB, JT[0], JT[1], JT[2], ax, ay, az);
+  }
+  mRot(MT, FAX[0], FAX[1], FAX[2], B.steer, HEAD[0], HEAD[1], HEAD[2], 0, SLIDE[1] * B.cF, SLIDE[2] * B.cF); mMul(pForkL.mat, MB, MT);
+  mRot(MT2, 1, 0, 0, B.spinF, 0, 0, 0, AXF[0], AXF[1], AXF[2]); mMul(MT3, MT, MT2); mMul(pWheelF.mat, MB, MT3);
+  mRot(MT2, 1, 0, 0, B.spinR, 0, 0, 0, 0, -BK.L + B.cR, -BK.b); mMul(pWheelR.mat, MB, MT2);
+  for (const p of PARTS) device.queue.writeBuffer(p.ub, 0, p.mat);
+
+  // ---- tracks
+  track(0, B.x - fX * BK.b - uX * 0.6, B.z - fZ * BK.b - uZ * 0.6, B.gR > 0 && B.crash <= 0, 0.14, 1);
+  track(1, B.x + fX * BK.a - uX * 0.6, B.z + fZ * BK.a - uZ * 0.6, B.gF > 0 && B.crash <= 0, 0.085, 0.45);
+  // ---- dust from the wheels
+  if (playing && B.crash <= 0) {
+    const wx = B.x - fX * BK.b - uX * 0.6, wy = B.y - fY * BK.b - uY * 0.6, wz = B.z - fZ * BK.b - uZ * 0.6;
+    if (B.gR > 0) {
+      dAcc += clamp(B.slip * 140 + abs(B.vlong) * 2.6, 0, 150) * dt;
+      while (dAcc >= 1) {
+        dAcc -= 1; const k = 1.2 + B.slip * 7 + rnd() * 2.5, sd = (rnd() - 0.5) * 2.4;
+        puff(wx, wy, wz, B.vx * 0.3 - sy * k + rX * sd, 0.8 + rnd() * 1.8 + B.slip * 3, B.vz * 0.3 - cy * k + rZ * sd, 1.2 + rnd() * 1.6, 0.2 + rnd() * 0.16, 0.25, 5.5, 0.36);
+      }
+      // (see below for the rockets' own blast)
+  // roost: sand thrown up and back off the paddles, heavier under power and wheelspin
+      rAcc += clamp((B.slip * 280 + B.thr * abs(B.vlong) * 3.5) * (1 + 1.5 * B.soft), 0, 380) * dt; // soft sand throws more
+      while (rAcc >= 1) {
+        rAcc -= 1; const k = 2.5 + B.slip * 7 + rnd() * 4, sd = (rnd() - 0.5) * 2;
+        puff(wx + rX * sd * 0.04, wy + 0.06, wz + rZ * sd * 0.04, B.vx * 0.55 - sy * k + rX * sd, 2.5 + rnd() * 4 + B.slip * 4.5, B.vz * 0.55 - cy * k + rZ * sd, 0.55 + rnd() * 0.6, 0.045 + rnd() * 0.06, -9.8, 0.7, 0.8, 0.35);
+      }
+    }
+    if (B.land > 0) {
+      soundThump(B.land);
+      // the view drops with the hit and shakes; a hard landing throws a skirt of heavy sand as well as dust
+      camDropV -= B.land * 2.6; shk = min(1.3, shk + B.land);
+      for (let i = 0; i < 46 * max(B.land - 0.3, 0); i++) { const a = rnd() * TAU, k = 3 + rnd() * 5; puff(B.x + sin(a) * 0.4, B.y - 0.6, B.z + cos(a) * 0.4, B.vx * 0.5 + sin(a) * k, 2 + rnd() * 4 * B.land, B.vz * 0.5 + cos(a) * k, 0.6 + rnd() * 0.6, 0.05 + rnd() * 0.07, -9.8, 0.7, 0.8, 0.35); }
+      for (let i = 0; i < 26 * B.land + 8; i++) { const a = rnd() * TAU, k = 2 + rnd() * 4; puff(B.x + sin(a) * 0.5, B.y - 0.55, B.z + cos(a) * 0.5, B.vx * 0.4 + sin(a) * k, 0.5 + rnd() * 2, B.vz * 0.4 + cos(a) * k, 1.4 + rnd() * 1.2, 0.25 + rnd() * 0.2); }
+      B.land = 0;
+    }
+  } else B.land = 0;
+  // ---- a crash in progress: every hard hit thumps and throws sand, and both bodies trail dust while they slide
+  if (B.crash > 0) {
+    if (RD.hit > 0) { soundThump(RD.hit); shk = min(1.3, shk + RD.hit * 0.6); for (let i = 0; i < 30 * RD.hit; i++) { const a = rnd() * TAU, k = 1.5 + rnd() * 4; puff(RD.x + sin(a) * 0.3, RD.y, RD.z + cos(a) * 0.3, RD.vx * 0.4 + sin(a) * k, 0.8 + rnd() * 2.5, RD.vz * 0.4 + cos(a) * k, 1.2 + rnd() * 1.2, 0.22 + rnd() * 0.2); } RD.hit = 0; }
+    cdAcc += (hypot(RD.vx, RD.vz) + B.speed) * 1.6 * dt;
+    while (cdAcc >= 1) { cdAcc -= 1; const o = rnd() < 0.5 ? RD : B; if (o.y - heightAt(o.x, o.z) < 0.6) puff(o.x + rr(-0.3, 0.3), o.y - 0.1, o.z + rr(-0.3, 0.3), o.vx * 0.3, 0.6 + rnd() * 1.4, o.vz * 0.3, 1.1 + rnd(), 0.2 + rnd() * 0.15); }
+  }
+  // ---- dust devils: each thermal near enough to see lifts a turning column of dust off the sand, so rising air can be read from a distance
+  {
+    const day = sstep(0.05, 0.5, SUN[1]), ci = floor(B.x / THC), cj = floor(B.z / THC);
+    if (day > 0) for (let j = cj - 2; j <= cj + 2; j++) for (let i = ci - 2; i <= ci + 2; i++) {
+      const k = ((i & 7) + (j & 7) * THN) * 4, S = THERM[k + 3]; if (!S) continue;
+      const tx = THERM[k] + (i - (i & 7)) * THC, tz = THERM[k + 1] + (j - (j & 7)) * THC; if (hypot(tx - B.x, tz - B.z) > 620) continue;
+      devAcc += 9 * day * dt;
+      while (devAcc >= 1) {
+        devAcc -= 1; const a = rnd() * TAU, hh = rnd() * rnd() * 110, r = 2.5 + hh * 0.1 + rnd() * 3, px = tx + hh * 0.12 + cos(a) * r, pz = tz + sin(a) * r;
+        puff(px, heightAt(tx, tz) + 0.5 + hh, pz, -sin(a) * 7, S * 0.9, cos(a) * 7, 3 + rnd() * 2, 1.2 + hh * 0.02 + rnd(), 1.2, 1.6, 0.2, 0.25);
+      }
+    }
+  }
+  // rocket blast: hot exhaust streaming back, and sand torn off the ground when it is close below
+  if (B.bst > 0.05 && B.crash <= 0) {
+    for (let i = 0; i < 3; i++) {
+      const sd = i & 1 ? -1 : 1, k = 9 + rnd() * 8;
+      const nx = MB[0] * sd * NOZ[0] + MB[4] * NOZ[1] + MB[8] * (NOZ[2] - 0.6) + MB[12], ny = MB[1] * sd * NOZ[0] + MB[5] * NOZ[1] + MB[9] * (NOZ[2] - 0.6) + MB[13], nz = MB[2] * sd * NOZ[0] + MB[6] * NOZ[1] + MB[10] * (NOZ[2] - 0.6) + MB[14];
+      if (rnd() < B.bst) puff(nx, ny, nz, B.vx - fX * k + rr(-1.5, 1.5), B.vy - fY * k + rr(-0.5, 2), B.vz - fZ * k + rr(-1.5, 1.5), 0.7 + rnd() * 0.9, 0.14 + rnd() * 0.1, 0.6, 7, 0.3, 1.2);
+    }
+  }
+  // wind lifting sand off nearby crests: look for a gentle climb behind and a drop ahead, and send a streamer downwind
+  for (let i = 0; i < 4; i++) {
+    const x = B.x + rr(-80, 80), z = B.z + rr(-80, 80), h = heightAt(x, z);
+    if (heightAt(x - 3, z) < h - 0.1 && heightAt(x + 4, z) < h - 0.6) puff(x, h + 0.12, z, 4.5 + rnd() * 3.5, 0.25 + rnd() * 0.5, rr(-0.6, 0.6), 1.5 + rnd() * 1.2, 0.45 + rnd() * 0.4, -0.5, 2.4, 0.17, 0.45);
+  }
+  dustStep(dt);
+  if (dCount) device.queue.writeBuffer(dustVB, 0, dI, 0, dCount * 8);
+
+  // rough air comes through the bars
+  if (B.turb > 0.5 && B.wing > 0.3 && B.air > 0.3) shk = max(shk, min(0.5, (B.turb - 0.5) * 0.3));
+  // ---- the hit of a landing: the view sinks on a heavy spring and comes back slowly
+  { const h = min(dt, 0.033); camDropV += (-camDrop * 70 - camDropV * 11) * h; camDrop += camDropV * h; shk *= exp(-dt * 5.5); }
+  // ---- chase camera
+  const cr = B.crash > 0, tgX = cr ? RD.x : B.x, tgY = cr ? RD.y : B.y, tgZ = cr ? RD.z : B.z; // a crash is watched from behind the rider, wherever he ends up
+  if (playing) { let d = (cr ? RD.yaw : B.yaw + B.r * 0.12) - CAM.yaw; d -= round(d / TAU) * TAU; CAM.yaw += d * (1 - exp(-dt * 3.2)); } else CAM.yaw += dt * 0.12;
+  const cd = (playing ? 4.6 : 6.5) + B.speed * 0.03 + B.wing * 2.2, ch = 1.55 + B.speed * 0.012, cyS = sin(CAM.yaw), cyC = cos(CAM.yaw);
+  const kx = 1 - exp(-dt * 9), ky = 1 - exp(-dt * 4.5);
+  CAM.x += (tgX - cyS * cd - CAM.x) * kx; CAM.z += (tgZ - cyC * cd - CAM.z) * kx; CAM.y += (tgY + ch - CAM.y) * ky;
+  const floorY = heightAt(CAM.x, CAM.z) + 0.7; if (CAM.y < floorY) CAM.y = floorY;
+  // the rider's eyes when riding; the chase camera for the menu, crashes and chase view
+  const fp = pov && playing && B.crash <= 0;
+  let ex = CAM.x, ey = CAM.y + camDrop * 1.6, ez = CAM.z, vx, vy, vz, roll = 0, l;
+  if (fp) {
+    const e1 = EYE[1] + 0.09 * rStand - 0.08 * rCrouch, e2 = EYE[2] + 0.06 * rStand - 0.07 * rBack; // the view rises and shifts with the rider
+    ex = MB[0] * EYE[0] + MB[4] * e1 + MB[8] * e2 + MB[12]; ey = MB[1] * EYE[0] + MB[5] * e1 + MB[9] * e2 + MB[13] + camDrop * 0.55; ez = MB[2] * EYE[0] + MB[6] * e1 + MB[10] * e2 + MB[14];
+    // the head stays more level than the bike, rolls with part of the lean and looks into the turn
+    camPitch += (B.pitch * 0.55 - 0.26 - camPitch) * (1 - exp(-dt * 7)); camRoll += (ln * 0.62 - camRoll) * (1 - exp(-dt * 9));
+    const yw = B.yaw + clamp(B.r * 0.1, -0.25, 0.25) + B.steer * 0.25, cpp = camPitch + camDrop * 0.45 + shk * 0.014 * sin(tNow * 67), cq = cos(cpp);
+    vx = sin(yw) * cq; vy = sin(cpp); vz = cos(yw) * cq; roll = camRoll + shk * 0.02 * sin(tNow * 53);
+  } else {
+    const ld = cr ? 0 : 2.5; vx = tgX + cyS * ld - CAM.x; vy = tgY + 0.55 - CAM.y; vz = tgZ + cyC * ld - CAM.z; l = 1 / hypot(vx, vy, vz); vx *= l; vy *= l; vz *= l;
+    camPitch = B.pitch * 0.55 - 0.26; camRoll = 0;
+  }
+  l = 1 / hypot(vx, vz); const fhx = vx * l, fhz = vz * l, r0x = vz * l, r0z = -vx * l, u0x = vy * r0z, u0y = vz * r0x - vx * r0z, u0z = -vy * r0x;
+  const cro = cos(roll), sro = sin(roll), cRx = r0x * cro - u0x * sro, cRy = -u0y * sro, cRz = r0z * cro - u0z * sro, cUx = u0x * cro + r0x * sro, cUy = u0y * cro, cUz = u0z * cro + r0z * sro;
+  const fov = dbgFov || (fp ? 1.45 : 0.98) + min(B.speed, 40) * 0.0075 + B.bst * 0.1 + shk * 0.05, ty = tan(fov / 2), tx = ty * RW / RH, sX = 1 / tx, sY = 1 / ty, NEAR = fp ? 0.06 : 0.15;
+  const cdR = ex * cRx + ey * cRy + ez * cRz, cdU = ex * cUx + ey * cUy + ez * cUz, cdF = ex * vx + ey * vy + ez * vz;
+  U[0] = sX * cRx; U[4] = sX * cRy; U[8] = sX * cRz; U[12] = -sX * cdR;
+  U[1] = sY * cUx; U[5] = sY * cUy; U[9] = sY * cUz; U[13] = -sY * cdU;
+  U[2] = 0; U[6] = 0; U[10] = 0; U[14] = NEAR;
+  U[3] = vx; U[7] = vy; U[11] = vz; U[15] = -cdF;
+  // ---- shadow map around the bike
+  const E = 3.4, R = 90, S = SUN, shl = hypot(S[0], S[2]); l = shl > 1e-3 ? 1 / shl : 0;
+  const lRx = l ? S[2] * l : 1, lRz = -S[0] * l, lUx = S[1] * lRz, lUy = S[2] * lRx - S[0] * lRz, lUz = -S[1] * lRx;
+  U[16] = lRx / E; U[20] = 0; U[24] = lRz / E; U[28] = -(B.x * lRx + B.z * lRz) / E;
+  U[17] = lUx / E; U[21] = lUy / E; U[25] = lUz / E; U[29] = -(B.x * lUx + B.y * lUy + B.z * lUz) / E;
+  U[18] = -S[0] / (2 * R); U[22] = -S[1] / (2 * R); U[26] = -S[2] / (2 * R); U[30] = (B.x * S[0] + B.y * S[1] + B.z * S[2]) / (2 * R) + 0.5;
+  U[19] = 0; U[23] = 0; U[27] = 0; U[31] = 1;
+  bikeSh += (shadowAt(B.x, B.z) - bikeSh) * min(1, dt * 8);
+  U[32] = ex; U[33] = ey; U[34] = ez; U[35] = tNow;
+  U[36] = cRx * tx; U[37] = cRy * tx; U[38] = cRz * tx; U[39] = expo;
+  U[40] = cUx * ty; U[41] = cUy * ty; U[42] = cUz * ty;
+  U[44] = vx; U[45] = vy; U[46] = vz; U[47] = NEAR;
+  U[48] = S[0]; U[49] = S[1]; U[50] = S[2]; U[51] = night;
+  U[52] = SUNC[0]; U[53] = SUNC[1]; U[54] = SUNC[2]; U[55] = SUN_TAN;
+  U[56] = AMB[0]; U[57] = AMB[1]; U[58] = AMB[2]; U[59] = SUN_SIDE;
+  U[68] = fX; U[69] = fY; U[70] = fZ; U[71] = night * 3;
+  const g0x = B.x - fX * BK.b - uX * 0.6, g0z = B.z - fZ * BK.b - uZ * 0.6, g1x = B.x + fX * BK.a - uX * 0.6, g1z = B.z + fZ * BK.a - uZ * 0.6, up = B.crash <= 0 ? 1 : 0;
+  U[72] = g0x; U[73] = heightAt(g0x, g0z); U[74] = g0z; U[75] = B.gR > 0 ? up : 0;
+  U[76] = g1x; U[77] = heightAt(g1x, g1z); U[78] = g1z; U[79] = B.gF > 0 ? up : 0;
+  U[60] = B.x; U[61] = B.y; U[62] = B.z; U[63] = bikeSh;
+  U[64] = SAND[0]; U[65] = SAND[1]; U[66] = SAND[2];
+  device.queue.writeBuffer(UB, 0, U);
+  selectNodes(ex, ez, fhx, fhz);
+  device.queue.writeBuffer(nodeVB, 0, NODES, 0, nNodes * 4);
+
+  // ---- draw
+  const enc = device.createCommandEncoder();
+  let rp;
+  if (skyDirty) {
+    skyDirty = false;
+    rp = enc.beginRenderPass({ colorAttachments: [{ view: viewSky, clearValue: [0, 0, 0, 1], loadOp: 'clear', storeOp: 'store' }] });
+    rp.setPipeline(pSkyBake); rp.setBindGroup(0, bgS); rp.draw(3); rp.end();
+  }
+  rp = enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: viewSM, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
+  rp.setPipeline(pShadow); rp.setBindGroup(0, bgS);
+  for (const p of PARTS) { if (p.fx) continue; rp.setBindGroup(1, p.bg); rp.setVertexBuffer(0, p.vb); rp.setIndexBuffer(p.ib, 'uint32'); rp.drawIndexed(p.n); }
+  rp.end();
+  rp = enc.beginRenderPass(passScene);
+  rp.setBindGroup(0, bgM);
+  rp.setPipeline(pTerrain); rp.setVertexBuffer(0, gridVB); rp.setVertexBuffer(1, nodeVB); rp.setIndexBuffer(gridIB, 'uint16'); rp.drawIndexed(gridN, nNodes);
+  if (kUsed) { rp.setPipeline(pTrack); rp.setVertexBuffer(0, trackVB); rp.draw(6, kUsed); }
+  rp.setPipeline(pPShadow);
+  rp.setVertexBuffer(0, PROPS[0].inst); rp.draw(48, PROPS[0].count); rp.setVertexBuffer(0, tuftVB); rp.draw(48, tuftN);
+  rp.setPipeline(pProp);
+  for (const p of PROPS) { rp.setVertexBuffer(0, p.vb); rp.setVertexBuffer(1, p.inst); rp.setIndexBuffer(p.ib, 'uint32'); rp.drawIndexed(p.n, p.count); }
+  rp.setPipeline(pGrass); rp.setVertexBuffer(0, bladeVB); rp.draw(18, bladeN);
+  rp.setPipeline(pBike);
+  for (const p of PARTS) { if ((fp && p.hide) || (p.fx && B.bst < 0.03)) continue; rp.setBindGroup(1, p.bg); rp.setVertexBuffer(0, p.vb); rp.setIndexBuffer(p.ib, 'uint32'); rp.drawIndexed(p.n); }
+  rp.setPipeline(pSky); rp.draw(3);
+  if (dCount) { rp.setPipeline(pDust); rp.setVertexBuffer(0, dustVB); rp.draw(6, dCount); }
+  rp.setPipeline(pMote); rp.setVertexBuffer(0, moteVB); rp.draw(6, MOTES);
+  rp.end();
+  // light shafts at half resolution, then their blur
+  rp = enc.beginRenderPass(passRays); rp.setPipeline(pRays); rp.setBindGroup(0, bgM); rp.setBindGroup(1, bgDepth); rp.draw(3); rp.end();
+  rp = enc.beginRenderPass(passBlur); rp.setPipeline(pRB); rp.setBindGroup(0, bgBlur); rp.draw(3); rp.end();
+  // bloom
+  for (let i = 0; i < bloomPass.length; i++) { rp = enc.beginRenderPass(bloomPass[i]); rp.setPipeline(i === 0 ? pDown0 : i < NB ? pDown : pUp); rp.setBindGroup(0, bloomBG[i]); rp.draw(3); rp.end(); }
+  // composite to the screen
+  passPost.colorAttachments[0].view = ctx.getCurrentTexture().createView();
+  rp = enc.beginRenderPass(passPost); rp.setPipeline(pPost); rp.setBindGroup(0, bgPost); rp.draw(3); rp.end();
+  device.queue.submit([enc.finish()]);
+
+  // ---- HUD
+  // air time: counts up live, is banked as score on a clean landing (100 points a second), and is lost in a crash
+  // proximity: gliding fast with the sand close under or beside the wings builds points, more the closer it is;
+  // like air time they are banked by a clean landing and lost in a crash
+  proxD = -1;
+  if (B.air > 1.2 && B.wing > 0.5 && B.crash <= 0 && B.speed > 14) { groundNormal(B.x, B.z); const d = max(0, (B.y - heightAt(B.x, B.z) - 0.7) * _gn[1]); if (d < 12) { proxD = d; prox += (1 - d / 12) * (1 - d / 12) * B.speed * 9 * dt; } }
+  if (B.crash > 0) { wasBones = RD.bones; if (airMax > 0.5) { airText = '   lost ' + airMax.toFixed(1) + ' s'; airShow = 2.5; } airMax = 0; B.flips = 0; prox = 0; }
+  else if (wasBones) { bones += wasBones; keep('duneBones', '' + bones); airText = '   ' + wasBones + (wasBones > 1 ? ' bones broken' : ' bone broken') + ', thrown ' + round(RD.dist) + ' m'; airShow = 3.5; wasBones = 0; }
+  else if (B.air > 0) airMax = B.air;
+  else if (airMax > 0) {
+    if (airMax > 0.5) { const nf = abs(B.flips), pp = round(prox), pts = round(airMax * 100) + 500 * nf + pp; score += pts; airText = '   +' + pts + (pp ? '   proximity ' + pp : '') + (nf ? '   ' + (nf > 1 ? nf + ' x ' : '') + (B.flips > 0 ? 'backflip' : 'front flip') : ''); airShow = 3; if (airMax > bestAir) { bestAir = airMax; keep('duneBestAir', bestAir.toFixed(2)); } }
+    airMax = 0; B.flips = 0; prox = 0;
+  }
+  elFuel.style.transform = 'scaleX(' + B.fuel.toFixed(3) + ')';
+  airShow -= dt; hudT -= dt; noteT -= dt;
+  if (hudT <= 0) {
+    hudT = 0.1; const hh = floor(hour), mm = floor((hour - hh) * 60);
+    elScore.textContent = playing ? 'SCORE ' + score + '    BEST AIR ' + bestAir.toFixed(1) + ' s' + (bones ? '    BONES ' + bones : '') + (airMax > 0.4 ? '\nAIR ' + airMax.toFixed(1) + ' s' + (abs(B.rot) > 5 ? '   FLIP ' + floor(abs(B.rot) / TAU + 0.2) : '') : '') + (B.wing > 0.3 && B.air > 0.5 ? '\nCLIMB ' + (B.vy >= 0 ? '+' : '') + B.vy.toFixed(1) + ' m/s' + (B.lift > 0.8 ? '   LIFT +' + B.lift.toFixed(1) : B.lift < -0.8 ? '   SINK ' + B.lift.toFixed(1) : '') : '') + (B.stl ? '\nSTALL: nose down' : '') + (B.fold > 0.3 ? '\nWING TIPS FOLDED: slow down' : '') + (B.ps > 0.5 ? '\nPOWER SLIDE' : '') + (prox >= 1 ? '\nPROXIMITY +' + round(prox) + (proxD >= 0 ? '   ' + proxD.toFixed(1) + ' m' : '') : '') : '';
+    elFuelBox.className = B.bst > 0.5 ? 'x' : B.armed ? '' : 'z';
+    elHud.textContent = playing ? round(B.speed * 3.6) + ' km/h   ' + (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm + (B.crash > 0 ? '   crashed   ' + RD.bones + (RD.bones > 1 ? ' bones' : ' bone') : noteT > 0 ? note : airShow > 0 ? airText : '') : '';
   }
 }
-
-// ---------------------------------------------------------------- input
-const key = (e, v) => {
-  switch (e.code) {
-    case 'KeyW': kf = v; break; case 'KeyS': kb = v; break; case 'KeyA': kl = v; break; case 'KeyD': kr = v; break;
-    case 'KeyE': ku = v; break; case 'KeyQ': kd = v; break; case 'ShiftLeft': case 'ShiftRight': ks = v; break;
-    default: if (v && !e.repeat) {
-      if (e.code === 'KeyH') { hud = !hud; hTot = 0; hPer = 1e9; info.textContent = ''; }
-      else if (e.code === 'KeyM') mute();
-      else if (e.code === 'Escape') ui(true);
-      else if (e.code >= 'Digit1' && e.code <= 'Digit6') lookAt(...POSES[e.code.charCodeAt(5) - 49]);
-    }
-  }
-};
-// behind the menu only the stats and mute keys work
-addEventListener('keydown', (e) => { if (menu && e.code !== 'KeyH' && e.code !== 'KeyM') return; sound(); key(e, 1); });
-addEventListener('keyup', (e) => key(e, 0));
-const release = () => { kf = kb = kl = kr = ku = kd = ks = 0; tId = -1; tN = 0; };
-const capture = () => { sound(); const p = canvas.requestPointerLock({ unadjustedMovement: true }); if (p && p.catch) p.catch(() => canvas.requestPointerLock()).catch(() => 0); };
-canvas.addEventListener('click', capture);
-addEventListener('mousemove', (e) => { if (document.pointerLockElement === canvas) { mdx += e.movementX; mdy += e.movementY; } });
-addEventListener('blur', release);
-const touch = (e) => {
-  e.preventDefault(); sound(); tN = e.touches.length;
-  let f = null, first = false; for (let i = 0; i < tN; i++) if (e.touches[i].identifier === tId) f = e.touches[i];
-  if (!f) { tId = -1; if (tN) { f = e.touches[0]; tId = f.identifier; first = true; } }
-  if (f) {
-    // the touch axes turn with the page when it lies on its side
-    const x = rot.matches ? f.clientY : f.clientX, y = rot.matches ? -f.clientX : f.clientY, s = 1100 / min(innerWidth, innerHeight);
-    if (first) { tx0 = x; ty0 = y; } else { mdx += (x - tx) * s; mdy += (y - ty) * s; } // the view follows the finger at once
-    tx = x; ty = y;
-  }
-};
-for (const n of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) canvas.addEventListener(n, touch, { passive: false });
-
-// ---------------------------------------------------------------- menu
-// The scene keeps rendering (blurred by CSS) behind the menu. Esc, losing the mouse or the corner button open it.
-let menu = true;
-const bDive = $('d');
-const ui = (m) => {
-  if (dead) return;
-  menu = m; body.className = m ? 'm' : document.pointerLockElement ? 'g p' : 'g';
-  // focus the dive button so Enter works (delayed: it can't take focus while still hidden)
-  if (m) { release(); setTimeout(() => menu && bDive.focus(), 100); } else document.activeElement.blur();
-};
-const go = () => {
-  sound(); ui(false); bDive.textContent = 'Resume';
-  // phones: go fullscreen and ask for landscape; where that is refused the CSS rotation still applies
-  if (mob) document.documentElement.requestFullscreen?.()?.then(() => screen.orientation.lock('landscape')).catch(() => 0);
-  if (!mob) capture();
-};
-bDive.onclick = go; $('o').onclick = () => ui(true);
-// detail buttons: the current level is lit, the others reload the page with theirs
-$('q').querySelectorAll('button').forEach((b, i) => { if (i === 2 - LV) b.className = 'on'; else b.onclick = () => { keep('abyssal', 2 - i); location.reload(); }; });
-document.addEventListener('pointerlockchange', () => ui(!document.pointerLockElement));
-
-// draw the first frame and wait for the GPU to finish it (pipelines get compiled on first use) before the reveal
-lookAt(...POSES[0]);
-await say('Letting the light in…', 1, 400);
-render(); await Q.onSubmittedWorkDone();
-setTimeout(keep, 15e3, 'abyssalLoad', ''); // the load counts as survived after 15 s of frames
-ui(true);
-requestAnimationFrame((t) => { F[LAST] = t; requestAnimationFrame(frame); });
+await tick(1, 'Ready');
+// draw the first frame and wait for the GPU to finish it (pipelines compile on first use) before the reveal
+frame(performance.now());
+await device.queue.onSubmittedWorkDone();
+try { delete localStorage.duneLoad; } catch {}
+body.className = 'm';
+// detail button: shows the level, steps to the next and reloads
+const elQ = $('q'); elQ.textContent = 'Detail: ' + ['High', 'Medium', 'Low'][LV]; elQ.onclick = () => { keep('dune', (LV + 1) % 3); location.reload(); };
+// A fixed 30-second ride for measuring frame times: same start, same inputs, same hour, every run.
+// DUNE.bench() resolves to { avg, p99, max, over } in milliseconds; "over" counts frames longer than 17.5 ms.
+async function bench() {
+  resetBike(spX, spZ, PI / 2); hour = 16.5; tRate = 2; pov = true; playing = true; body.className = 'g'; benchT = 0; benchF.length = 0; benching = true;
+  await new Promise((r) => { benchDone = r; });
+  benching = false; IN.boost = 0; B.wingOn = 0; benchF.shift(); benchF.sort((a, b) => a - b);
+  const r = { frames: benchF.length, avg: +(benchF.reduce((a, b) => a + b, 0) / benchF.length).toFixed(2), p99: +benchF[floor(benchF.length * 0.99)].toFixed(1), max: +benchF[benchF.length - 1].toFixed(1), over: benchF.filter((x) => x > 17.5).length, res: [RW, RH], level: LV };
+  say('avg ' + r.avg + ' ms, worst ' + r.max + ' ms'); return r;
+}
+// for debugging from the console
+window.DUNE = { bench, get score() { return score; }, rmk: RMK, wings(v) { B.wingOn = v ? 1 : 0; }, tufts: propData.tufts, counts: { rocks: PROPS[0].count, pebbles: PROPS[1].count, tufts: tuftN, blades: bladeN }, set fov(v) { dbgFov = v; }, rocks: propData.rocks, reset: resetBike, get res() { return [RW, RH]; }, loadMs: round(performance.now()), B, IN, CAM, frame, get playing() { return playing; }, set playing(v) { playing = v; }, get hour() { return hour; }, set hour(v) { hour = v; }, get pov() { return pov; }, set pov(v) { pov = v; }, set rate(v) { tRate = v; } };

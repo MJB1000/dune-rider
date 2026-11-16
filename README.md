@@ -1,77 +1,72 @@
-# Abyssal Garden
+# Dune Rider
 
-**A dreamy underwater world you can swim through, right in your browser.**
+A dirt bike on an endless field of sand dunes, in the browser. Everything is made by code: no images, no 3D models, no sound files, no game engine. The whole game is one 99 KB `index.html`.
 
-Towering kelp forests, sunbeams pouring through a rippling surface, a sunken ship, manta rays gliding overhead.
-And all of it is made by code: no images, no 3D models, no sound files. The whole world fits in **one 96 KB HTML file**.
+Built on the WebGPU groundwork of [Abyssal Garden](https://github.com/Noniv/abyssal-garden) by Maksymilian Dendura (MIT): the single-file build, the mesh helpers and the no-engine approach come from there. The underwater scene itself is still in this repository's git history (`main` branch).
 
-![Kelp forest with a stone whale tail and a manta ray](.github/screenshots/whale-fluke.jpg)
+## Run it
 
-## Try it
+Open `index.html` in a desktop browser with WebGPU (Chrome, Edge, recent Safari), or serve the folder:
 
-1. Download [`index.html`](index.html).
-2. Open it in **Chrome** or **Edge** on a desktop computer.
-3. Wait a few seconds while the world is built, then press **Dive in** and start swimming.
+```bash
+python3 -m http.server 8765
+```
 
-Nothing to install, and it works offline. It needs a browser with **WebGPU**. If you see *"This scene needs WebGPU"*, update your browser or switch to Chrome / Edge.
-
-## What's down there
-
-- **Kelp forests** that sway in the current and sparkle with tiny gold and green specks
-- **Light rays** streaming down from a wavy surface, with shimmering caustics on the sea floor
-- **A sunken wooden ship**, a **giant stone whale tail**, rock arches, canyons and floating boulders
-- **Manta rays**, schools of fish, rising bubbles and drifting particles
-- **A purple grotto** with glowing magenta ground cover, coral and barrel sponges
-- **A soundscape** made up as you listen: a deep rumble, distant whale calls, soft chimes and bubbles
-
-| | |
-|---|---|
-| ![Shipwreck](.github/screenshots/shipwreck.jpg) | ![Looking up through the kelp](.github/screenshots/kelp-forest.jpg) |
-| ![Barrel sponges](.github/screenshots/sponge-garden.jpg) | ![Light rays over the kelp basin](.github/screenshots/light-rays.jpg) |
-
-![The purple grotto](.github/screenshots/purple-grotto.jpg)
+then open <http://localhost:8765>.
 
 ## Controls
 
-| | Keyboard & mouse |
-|---|---|
-| Look around | Move the mouse |
-| Swim | `W` `A` `S` `D` |
-| Up / down | `E` / `Q` |
-| Swim faster | Hold `Shift` |
-| Jump to a viewpoint | `1` to `6` (the spots in the screenshots) |
-| Menu | `Esc` releases the mouse and opens the menu with the list of controls; **Resume** takes you back |
-| Sound on / off | `M` (sound starts when you dive in) |
-| Performance stats | `H` |
-| Detail level | **Low**, **Medium** or **High** in the menu (reloads the page) |
-
-The seabed, cliffs and arches are solid: you glide along the rock instead of swimming into it, and you still fit through every tunnel and arch. Kelp, plants, corals, sponges, loose rocks, the floating boulders, the ship and the whale tail you can swim through.
-
-**On a touchscreen:** hold one finger down to swim forward and slide it to steer. Put a second finger down to go faster. The `≡` button in the corner opens the menu. Phones always show the scene in landscape and start on Low or Medium detail. (Touch support is experimental.)
-
-## Detail levels
-
-The **Low**, **Medium** and **High** buttons in the menu pick the detail level; the current one is lit. Each level is the same world, built with less in it:
-
-| Level | What it is | Picked on a first visit for |
+| | Keyboard | Gamepad |
 |---|---|---|
-| **High** | The full scene | Computers |
-| **Medium** | Half of the leaves, sparkles and pebbles; small rocks, sponges and corals cast no shadows | Phones with 8 GB of memory |
-| **Low** | A quarter of the leaves, no anti-aliasing, coarser rocks and corals, simpler lighting, 480p to start with | Other phones, and computers with 4 GB of memory or less |
+| Throttle | `W` or `↑` | Right trigger |
+| Brake | `S`, `↓` or `Space` | Left trigger |
+| Steer | `A` `D` or `←` `→` | Left stick |
+| Power slide: throttle and brake together in a turn | `W` + `S` | Both triggers |
+| Rider weight forward / back (hold back and let go to spring off a lip) | `I` `K` | Right stick |
+| Rocket boost (hold; a full bar is 3 s, refills in 15 s) | `Shift` | A button |
+| Wings out, press again for the second set, again to stow | `F` | |
+| Tail fin: swing the nose left / right in the air | `Q` `E` | Shoulder buttons |
+| Wing trim, nose up / down | `Z` `X` | |
+| Reset the bike | `R` | |
+| Rider view / chase view | `C` | |
+| Speed of time | `T` | |
+| Hour back / on | `[` `]` | |
+| Mute | `M` | |
+| Pause | `Esc` | |
 
-If loading crashes the tab, or the graphics driver gives up, the page starts again one level lower. Your browser remembers the level, and the resolution and draw distance the scene settled on, for the next visit.
+In the air the throttle lifts the nose and the brake drops it, like a real bike. With the wings out it flies like a falcon: hold throttle to pull the wings in and stoop for speed, let go to spread them and turn the speed into lift, brake to pull up and flare, steer to bank. Every stoop costs a little height. Time in the air scores 100 points a second if you land it.
 
-## How it works
+Flips: with the wings away and more than about 5 m of air under you, let go of throttle and brake, then hold throttle to go over backward or brake to go over forward. One turn takes about 1.2 seconds; let go and the rider levels the bike. Each flip you land is worth 500 points. Throttle held from the ground does not start a flip.
 
-- The seabed is sculpted on your graphics card every time the page opens, then decorated with about two million kelp leaves and plants, tens of thousands of rocks, and thousands of sponges, corals and fish.
-- Everything is drawn with **WebGPU** directly. No game engine or 3D library is used.
-- The ship, whale tail, mantas, fish and corals are built from simple mathematical shapes.
-- The sound is synthesized live with the Web Audio API.
-- It's built to run smoothly: about 180 fps at 2560×1440 on an RTX 5070 Ti. On slower hardware it aims for 60 fps by lowering first the resolution and then how far away plants and rocks are drawn, in small steps. The scene is already running, blurred, behind the start menu, so most of that tuning is done before you dive in. A low-end phone (Samsung Galaxy A16) reaches about 20 fps at 670×372 on Low.
+The air moves. A steady wind is pushed up the windward faces of the dunes and sinks behind them, and by day columns of warm air rise off the sand, each marked by a dust devil. With the wings out the readout shows your climb rate and whether you are in lift or sink. The lower wings (a second press of `F`) add area: slower flight and a quarter less sink, which is what lets you circle inside a thermal and climb.
 
-## Make it your own
+Proximity: gliding fast within 12 m of the sand scores more the closer you are, banked with the air time when you land.
 
-The readable source code is in the [`source`](source) folder. To change something and rebuild `index.html` you need [Node.js](https://nodejs.org) 18 or newer:
+Crashes: the rider is thrown and tumbles, the bike slides and spins, and both carry on down a slope until they stop. Each hard hit breaks bones, and the tally is kept.
+
+Finer points. The sand varies: lee faces are loose and swallow the wheels, windward faces are a firmer crust, pans and ramps are hardpack. Weight forward (`I`) loads the front tyre and soaks up a lip; weight back (`K`) lightens the front, and holding it then letting go springs the bike into the air. Pull the wings past their stalling angle and one drops: let the nose fall to fly again. Within a wingspan of the sand the wings lift more (ground effect). The air is rough behind crests and at the edges of thermals. Pull harder than about 2.7 g for half a second and the wing tips fold back until you have flown slowly for a second.
+
+The tail fin (`Q` `E`) turns the bike flat, the way a helicopter's pedals do. With the wings out it is the fine control: a held fin turns the flight path about 4 degrees a second without banking.
+
+The booster is a bar: hold `Shift` to burn, let go to keep the rest. A full bar is 3 seconds and refills in 15 on the ground, or 45 in the air. It pushes harder the faster you are already going. A full burn in a glide with the wings spread and the brake held is worth about 150 m of climb; in a dive it is worth speed (about 300 km/h) instead. On a flat with the wings out, a burn lifts the nose and the bike takes off like a plane.
+
+## What is in it
+
+- **Dunes**: a 2 km square of sand at 1 m resolution that repeats forever. Megadunes up to about 235 m tall with ordinary dunes on their backs. Long windward climbs, sharp crests, slip faces at the angle of repose. Drawn with a quadtree of detail levels out to about 7 km.
+- **First person**: you ride from behind the bars, with the horizon rolling into the lean. `C` switches to a chase camera.
+- **Time of day**: the clock starts at your local time and the sun moves. A physically based sky (Rayleigh + Mie scattering) is redrawn as it goes; dune shadows follow the sun; stars and a headlight at night.
+- **The look**: rendered in high dynamic range, then bloom, sunlight scattering through haze that the dune shadows cut into, and a film-style grade. Stones and dry scrub sit in the low ground with their own shadows. Resolution adjusts itself to hold the frame rate.
+- **Sand**: wind ripples at two scales, grain sparkle near the camera, haze toward the horizon.
+- **Bike**: a rigid body on two sprung wheels stepped at 240 Hz, with grip limits, wheelspin, weight transfer and jumps. Full steering asks for the tightest turn the tyres can hold at that speed, the rider eases the throttle and shifts forward in a turn, and steers against a slide. A landing stays down: the dampers hold the bike on the ground, the sand takes a bite out of the speed, the engine labours for a moment, and the view drops and shakes with the hit. Tyre tracks and dust follow the wheels.
+- **Ramps**: four dunes in ten have a graded strip of packed sand that leads straight to the crest and ends in a lip.
+- **Pans**: about an eighth of the field is hard, dead-flat ground, the longest straight about 500 m, where the dunes shrink away to nothing. You start on one. Packed ground rolls easier than soft sand.
+- **Rocket boosters**: two pods on the tail. A 3-second tank shown as a bar, stronger the faster you are moving, that refills in 15 seconds on the ground and 45 in the air.
+- **Wings**: three metal sections a side flip out from the frame behind the steering head, with tail fins off the rear fender and an upright rudder that stands up when the bike leaves the ground. The brushed skins catch the sun: a soft sheen, and points of light that flash and move as the wing banks. Launch off a crest with speed and the bike glides at about 6.6 to 1.
+- **Sound**: a synthesized single-cylinder engine and wind.
+
+## Change it
+
+Source is in [`source`](source). You need Node.js 18 or newer.
 
 ```bash
 cd source
@@ -79,28 +74,22 @@ npm install
 npm run build
 ```
 
-This writes a new `index.html` next to this README. `npm run build:readable` writes an unminified version instead, which is easier to debug in the browser's developer tools.
-
-`npm run build:dev` writes a separate `dev.html` with two extra tools that are not part of `index.html`: `F` flies the camera along a one-minute path through the whole world, and `B` runs that flight as a benchmark and reports frame and GPU times.
+`npm run build:dev` writes an unminified `dev.html` instead. `npm test` runs the terrain and physics headless and prints speeds, air time and crashes. `node ramps.mjs` rides every megadune ramp. `node falcon.mjs` flies stoop-and-climb cycles. `node handling.mjs` measures cornering, braking, runway take-off and what a burn is worth with the wings in each position. `node sim.mjs` runs the longer stress simulations described in [`BRIEF.md`](BRIEF.md), which is the plan for what gets built next.
 
 | File | What's inside |
 |---|---|
-| [`source/src/world.js`](source/src/world.js) | The world layout: rock walls, arches, tunnels, kelp forests, sponge gardens, fish schools, mantas, the ship and the whale tail. **A good place to start.** |
-| [`source/src/shaders.js`](source/src/shaders.js) | The look: water and fog colors, lighting, kelp, rocks, the water surface and light rays (WGSL shader code) |
-| [`source/src/main.js`](source/src/main.js) | The renderer, the camera, the controls, the six viewpoints and the camera path the world is laid out around |
-| [`source/src/audio.js`](source/src/audio.js) | The soundscape |
-| [`source/src/quality.js`](source/src/quality.js) | The detail levels: which one a device starts on, and what is remembered between visits |
-| [`source/src/math.js`](source/src/math.js) | Noise, random numbers and mesh-building helpers |
-| [`source/src/dev.js`](source/src/dev.js) | Development tools (fly-through and benchmark), only in `dev.html` |
-| [`source/template.html`](source/template.html) | The page around the scene: loading bar, start menu, links and their styles |
+| `source/src/terrain.js` | The dune shape (`duneH`), sun position, sand colour, shadow bake, sky |
+| `source/src/physics.js` | Bike constants (`BK`: power, grip, suspension) and the simulation step |
+| `source/src/bike.js` | The bike and rider model |
+| `source/src/shaders.js` | Sand, sky, bike, dust, track, prop and post-processing shaders (WGSL) |
+| `source/src/props.js` | Stones and scrub: shapes and where they are scattered |
+| `source/src/main.js` | Renderer, camera, controls, dust, tracks, HUD |
+| `source/src/audio.js` | Engine and wind sound |
+| `source/src/math.js` | Noise, matrices, mesh builder |
+| `source/template.html` | The page: menu, loading bar, HUD |
 
-Some easy first tweaks:
-
-- **Water color:** `WCOL` (blue-green water) and `PCOL` (purple grotto) near the top of the shared scene code in `shaders.js`
-- **Sunlight color:** `SUNC` right next to them
-- **Brightness and light rays:** `EXPO` and `RAYS` in `main.js`
-- **Swimming speed:** search for `26 : 7` in `main.js` (fast speed : normal speed)
+Easy first tweaks: `SUN_EL` in `terrain.js` (sun height), `SAND` (sand colour), `Fmax` and `P` in `physics.js` (engine), the camera distance `cd` in `main.js`.
 
 ## License
 
-[MIT](LICENSE): free to use, change and share, including in your own projects.
+[MIT](LICENSE)

@@ -1,71 +1,93 @@
 // ============================================================================
-// audio: procedural underwater ambience (no sample files)
+// sound, synthesized live: a single-cylinder engine that follows the revs, and wind that follows the speed
 // ============================================================================
-// A fixed Web Audio graph, built on the first click / key / touch and driven by a 10 Hz timer, not the frame loop.
-// Layers: rumble, surface wash, water rush (follows camera speed), drone, bubbles, chimes and distant whale calls.
-let AC, OUT, muted = false;
-const VOL = 0.78; // master level: about -18.5 LUFS, peaks near -5.5 dBFS
-function mkSound(ac) {
-  const sr = ac.sampleRate;
-  // node of class C with options o, connected to every node / param in `to`; sources start at once
-  const N = (C, o, ...to) => { const n = new C(ac, o); for (const d of to) n.connect(d); if (n.start) n.start(); return n; };
-  const G = (gain, ...to) => N(GainNode, { gain }, ...to);
-  const BQ = (type, frequency, Q, ...to) => N(BiquadFilterNode, { type, frequency, Q }, ...to);
-  const lfo = (frequency, depth, to) => N(OscillatorNode, { frequency }, G(depth, to));
-  const noise = (secs, f) => { const n = sr * secs | 0, b = new AudioBuffer({ length: n, numberOfChannels: 2, sampleRate: sr }); f(b.getChannelData(0), n); f(b.getChannelData(1), n); return b; };
-  // seamless brown noise loop (the end cross-fades into the start)
-  const nb = noise(11, (d, n) => { for (let i = 0, b = 0; i < n + 4096; i++) { b = (b + 0.02 * (rnd() * 2 - 1)) / 1.02; if (i < n) d[i] = b * 3.5; else { const k = (i - n) / 4096; d[i - n] = d[i - n] * k + b * 3.5 * (1 - k); } } });
-  // reverb impulse: 5 s of noise that fades out and gets darker
-  const ir = noise(5, (d, n) => { for (let i = 0, b = 0; i < n; i++) { const t = i / sr; b += (rnd() * 2 - 1 - b) * (0.04 + 0.5 * exp(-t * 2)); d[i] = b * (1 - exp(-t * 30)) * exp(-t * 1.5) * (1 - i / n); } });
+let AC = null, aOsc1, aOsc2, aOsc3, aFilt, aEng, aWind, aWindF, aHiss, aRocket, aMaster, aNoise, muted = false, rpm = 1800, lastGear = 0, shiftT = 0;
+const GEARS = [9, 15, 22, 30, 42]; // top speed of each gear, m/s
 
-  const lim = N(DynamicsCompressorNode, { threshold: -6, knee: 6, ratio: 20, attack: 0.003, release: 0.3 }, ac.destination);
-  const out = OUT = G(0, lim), wet = N(ConvolverNode, { buffer: ir }, out);
-  const src = (playbackRate, ...to) => N(AudioBufferSourceNode, { buffer: nb, loop: true, playbackRate }, ...to);
-  // rumble
-  const rum = G(0.34, out); src(1, BQ('lowpass', 150, 0.7, rum)); lfo(0.07, 0.11, rum.gain); lfo(0.113, 0.08, rum.gain);
-  // surface wash + water rush: the same noise played at another speed, so the loops never line up
-  const wash = G(0.25, out), wave = G(1, wash), rush = G(0, out), rushF = BQ('bandpass', 300, 0.9, rush);
-  src(0.63, BQ('bandpass', 420, 0.5, wave), rushF); lfo(0.09, 0.3, wave.gain); lfo(0.151, 0.25, wave.gain);
-  // drone: stacked fifths on D, each note a pair of slightly detuned sines that slowly beat
-  const pad = G(1, out, G(1.5, wet));
-  [73.42, 110, 164.81, 246.94, 369.99].forEach((f, i) => { const g = G(0.022 - i * 0.003, pad); N(OscillatorNode, { frequency: f }, g); N(OscillatorNode, { frequency: f + rr(0.03, 0.11) }, g); });
-  // pooled voices: oscillator -> envelope -> pan -> dry + reverb
-  const pool = (n, send, type) => Array.from({ length: n }, () => { const p = N(StereoPannerNode, {}, out, G(send, wet)), g = G(0, p); return { p, g, o: N(OscillatorNode, { type }, g) }; });
-  const bub = pool(4, 0.12), chime = pool(3, 1.2), whale = pool(2, 2, 'triangle');
-  // one note: pitch glides f0 -> f1 over dur, level rises to vol in att then dies away
-  const play = (vs, t, f0, f1, dur, vol, att) => {
-    const v = vs.shift(), f = v.o.frequency, g = v.g.gain; vs.push(v);
-    v.p.pan.setValueAtTime(rr(-0.7, 0.7), t);
-    f.setValueAtTime(f0, t); f.exponentialRampToValueAtTime(f1, t + dur);
-    g.setValueAtTime(0, t); g.linearRampToValueAtTime(vol, t + att); g.setTargetAtTime(0, t + att, (dur - att) / 5);
-  };
-  const NOTES = [0, 2, 5, 7, 9, 12, 14, 17, 19]; // D major pentatonic, in semitones above A4
-  let lt = ac.currentTime, tB = lt + 1.5, tC = lt + 5, tW = lt + 12, lx = F[CX], ly = F[CY], lz = F[CZ];
-  out.gain.setTargetAtTime(VOL, lt, 1);
-  return () => {
-    const now = ac.currentTime, t = now + 0.05, dt = now - lt;
-    if (dt <= 0) return;
-    let v = hypot(F[CX] - lx, F[CY] - ly, F[CZ] - lz) / dt; if (v > 60) v = 0; // ignore jumps to a viewpoint
-    lt = now; lx = F[CX]; ly = F[CY]; lz = F[CZ];
-    rush.gain.setTargetAtTime(0.5 * pow(min(v / 26, 1), 1.2), t, 0.3); rushF.frequency.setTargetAtTime(220 + v * 14, t, 0.3);
-    const s = clamp(1 + ly / 30, 0, 1); wash.gain.setTargetAtTime(0.25 + 0.55 * s * s, t, 0.5);
-    if (t > tB) { // a burst of 1-6 bubbles: short rising blips, smaller bubbles higher and shorter
-      let tt = t;
-      for (let n = 1 + rnd() * rnd() * 6 | 0; n--;) { const f = rr(380, 1300); play(bub, tt, f, f * rr(1.4, 2.2), 0.05 + 40 / f, rr(0.03, 0.08), 0.006); tt += rr(0.07, 0.2); }
-      tB = tt + rr(0.5, 5);
-    }
-    if (t > tC) { const f = 440 * pow(2, NOTES[rnd() * 9 | 0] / 12); play(chime, t, f, f, 5, rr(0.02, 0.04), 0.03); tC = t + rr(2.5, 9); }
-    if (t > tW) { // a phrase of 2-3 slow glides
-      let tt = t;
-      for (let n = 2 + rnd() * 2 | 0; n--;) { const f = rr(170, 380), d = rr(1.6, 3.2); play(whale, tt, f, f * rr(0.6, 1.7), d, 0.08, d * 0.4); tt += d * 0.8; }
-      tW = tt + rr(20, 50);
-    }
-  };
-}
-// called on every click / key / touch: builds the graph once and resumes it when the browser allows
 function sound() {
-  if (!AC) { AC = new AudioContext({ latencyHint: 'playback' }); setInterval(mkSound(AC), 100); }
-  if (AC.state === 'suspended' && !document.hidden) AC.resume();
+  if (AC) { AC.resume(); return; }
+  const A = window.AudioContext || window.webkitAudioContext; if (!A) return;
+  AC = new A();
+  aMaster = AC.createGain(); aMaster.gain.value = 0.5; aMaster.connect(AC.destination);
+  // engine: three detuned oscillators through a waveshaper and a low-pass that opens with the throttle
+  aFilt = AC.createBiquadFilter(); aFilt.type = 'lowpass'; aFilt.frequency.value = 400; aFilt.Q.value = 2.5;
+  const shape = AC.createWaveShaper(), curve = new Float32Array(256);
+  for (let i = 0; i < 256; i++) { const x = i / 127.5 - 1; curve[i] = Math.tanh(x * 3.2); }
+  shape.curve = curve;
+  aEng = AC.createGain(); aEng.gain.value = 0;
+  const mk = (type, gain) => { const o = AC.createOscillator(), gn = AC.createGain(); o.type = type; gn.gain.value = gain; o.connect(gn); gn.connect(shape); o.start(); return o; };
+  aOsc1 = mk('sawtooth', 0.5); aOsc2 = mk('square', 0.3); aOsc3 = mk('sawtooth', 0.25);
+  shape.connect(aFilt); aFilt.connect(aEng); aEng.connect(aMaster);
+  // wind: looping noise through a band-pass
+  const nb = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate), nd = nb.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  const ns = AC.createBufferSource(); ns.buffer = nb; ns.loop = true;
+  aWindF = AC.createBiquadFilter(); aWindF.type = 'bandpass'; aWindF.frequency.value = 500; aWindF.Q.value = 0.6;
+  aWind = AC.createGain(); aWind.gain.value = 0;
+  ns.connect(aWindF); aWindF.connect(aWind); aWind.connect(aMaster); ns.start();
+  // sand hissing under the tyres: the same noise, high-passed
+  const hs = AC.createBufferSource(), hf = AC.createBiquadFilter(); hs.buffer = nb; hs.loop = true; hf.type = 'highpass'; hf.frequency.value = 2800;
+  aHiss = AC.createGain(); aHiss.gain.value = 0; hs.connect(hf); hf.connect(aHiss); aHiss.connect(aMaster); hs.start(0, 0.7);
+  aNoise = nb;
+  // rocket: the noise again, low and loud
+  const rs = AC.createBufferSource(), rf = AC.createBiquadFilter(); rs.buffer = nb; rs.loop = true; rf.type = 'lowpass'; rf.frequency.value = 700; rf.Q.value = 1.2;
+  aRocket = AC.createGain(); aRocket.gain.value = 0; rs.connect(rf); rf.connect(aRocket); aRocket.connect(aMaster); rs.start(0, 1.3);
 }
-const mute = () => { muted = !muted; OUT.gain.setTargetAtTime(muted ? 0 : VOL, AC.currentTime, 0.08); };
-document.addEventListener('visibilitychange', () => { if (AC) document.hidden ? AC.suspend() : AC.resume(); });
+
+// landing: a low thud from the suspension and a burst of sand
+function soundThump(s) {
+  if (!AC || muted) return;
+  const t = AC.currentTime, o = AC.createOscillator(), gn = AC.createGain();
+  const w = min(s, 1.5), len = 0.3 + 0.3 * w;
+  o.type = 'sine'; o.frequency.setValueAtTime(78 - 14 * w, t); o.frequency.exponentialRampToValueAtTime(26, t + 0.22 + 0.1 * w);
+  gn.gain.setValueAtTime(min(1.2, 0.8 * s), t); gn.gain.exponentialRampToValueAtTime(0.001, t + len);
+  o.connect(gn); gn.connect(aMaster); o.start(t); o.stop(t + len + 0.02);
+  // the weight of it: a slower, lower note under the thud, and the chassis bottoming out
+  const o2 = AC.createOscillator(), g2 = AC.createGain();
+  o2.type = 'sine'; o2.frequency.setValueAtTime(46, t); o2.frequency.exponentialRampToValueAtTime(22, t + 0.5);
+  g2.gain.setValueAtTime(0.0001, t); g2.gain.exponentialRampToValueAtTime(min(1.3, 0.9 * w), t + 0.03); g2.gain.exponentialRampToValueAtTime(0.001, t + 0.35 + 0.35 * w);
+  o2.connect(g2); g2.connect(aMaster); o2.start(t); o2.stop(t + 0.75 + 0.35 * w);
+  if (w > 0.6) {
+    const o3 = AC.createOscillator(), g3 = AC.createGain(), f3 = AC.createBiquadFilter(); o3.type = 'square'; o3.frequency.setValueAtTime(150, t); o3.frequency.exponentialRampToValueAtTime(70, t + 0.06);
+    f3.type = 'lowpass'; f3.frequency.value = 900; g3.gain.setValueAtTime(0.22 * w, t); g3.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    o3.connect(f3); f3.connect(g3); g3.connect(aMaster); o3.start(t); o3.stop(t + 0.1);
+  }
+  const b = AC.createBufferSource(), bg = AC.createGain(), bf = AC.createBiquadFilter(); b.buffer = aNoise; bf.type = 'bandpass'; bf.frequency.value = 900; bf.Q.value = 0.5;
+  bg.gain.setValueAtTime(0.35 * s, t); bg.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+  b.connect(bf); bf.connect(bg); bg.connect(aMaster); b.start(t, Math.random()); b.stop(t + 0.37);
+}
+
+// wings: a servo whirr and three latches as the sections lock out (or two as they stow)
+function soundWings(out) {
+  if (!AC || muted) return;
+  const t = AC.currentTime, o = AC.createOscillator(), gn = AC.createGain();
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(out ? 180 : 420, t); o.frequency.exponentialRampToValueAtTime(out ? 520 : 150, t + 0.5);
+  gn.gain.setValueAtTime(0.0001, t); gn.gain.exponentialRampToValueAtTime(0.06, t + 0.05); gn.gain.exponentialRampToValueAtTime(0.0001, t + 0.52);
+  o.connect(gn); gn.connect(aMaster); o.start(t); o.stop(t + 0.55);
+  for (const d of out ? [0.2, 0.36, 0.5] : [0.25, 0.48]) {
+    const b = AC.createBufferSource(), bg = AC.createGain(), bf = AC.createBiquadFilter(); b.buffer = aNoise; bf.type = 'bandpass'; bf.frequency.value = 2400; bf.Q.value = 4;
+    bg.gain.setValueAtTime(0.5, t + d); bg.gain.exponentialRampToValueAtTime(0.001, t + d + 0.07);
+    b.connect(bf); bf.connect(bg); bg.connect(aMaster); b.start(t + d, Math.random()); b.stop(t + d + 0.09);
+  }
+}
+
+// called every frame while riding
+function soundUpdate(dt, on) {
+  // revs follow the rear wheel through an automatic gearbox; the wheel spinning free in the air lets them rise
+  const v = abs(B.wR) * BK.Rr;
+  let gear = 0; while (gear < 4 && v > GEARS[gear] * 0.86) gear++;
+  const target = B.crash > 0 ? 1500 : 1900 + 7600 * clamp(v / GEARS[gear], 0, 1.05) + B.thr * 500 - B.bog * 1600; // (the engine labours for a moment after a heavy landing)
+  // an upshift cuts the drive for a moment and the revs drop into the next gear
+  if (gear !== lastGear) { if (gear > lastGear) shiftT = 0.13; lastGear = gear; }
+  shiftT -= dt;
+  rpm += (target - rpm) * min(1, dt * 9);
+  if (!AC) return;
+  const t = AC.currentTime, f = rpm / 60;
+  aOsc1.frequency.setTargetAtTime(f, t, 0.02); aOsc2.frequency.setTargetAtTime(f * 0.5, t, 0.02); aOsc3.frequency.setTargetAtTime(f * 1.503, t, 0.02);
+  aFilt.frequency.setTargetAtTime(260 + rpm * 0.16 + B.thr * 1500, t, 0.04);
+  aEng.gain.setTargetAtTime(on && !muted ? (0.10 + B.thr * 0.2) * (shiftT > 0 ? 0.3 : 1) : 0, t, shiftT > 0 ? 0.015 : 0.06);
+  aHiss.gain.setTargetAtTime(on && !muted && (B.gR > 0 || B.gF > 0) ? min(0.22, B.slip * 0.2 + B.speed * 0.0035) : 0, t, 0.08);
+  aRocket.gain.setTargetAtTime(on && !muted ? B.bst * 0.9 : 0, t, 0.04);
+  aWind.gain.setTargetAtTime(on && !muted ? min(0.5, B.speed * B.speed * 0.00045) : 0, t, 0.1);
+  aWindF.frequency.setTargetAtTime(350 + B.speed * 22, t, 0.1);
+}

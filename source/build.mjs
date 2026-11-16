@@ -1,7 +1,7 @@
 // Bundles src/*.js into the single self-contained ../index.html
 //   npm run build            minified
 //   npm run build:readable   unminified, for debugging
-//   npm run build:dev        ../dev.html: unminified, plus the development tools in src/dev.js
+//   npm run build:dev        ../dev.html: unminified, leaves index.html alone
 import { readFileSync, writeFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import path from 'node:path';
@@ -9,10 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { transformSync } from 'esbuild';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const FILES = ['quality.js', 'math.js', 'shaders.js', 'world.js', 'main.js', 'audio.js']; // concatenation order matters
+const FILES = ['math.js', 'terrain.js', 'physics.js', 'bike.js', 'props.js', 'shaders.js', 'audio.js', 'main.js']; // concatenation order matters
 const dev = process.argv.includes('--dev'), readable = dev || process.argv.includes('--readable');
 const out = dev ? 'dev.html' : 'index.html';
-if (dev) FILES.push('dev.js');
 
 let js = FILES.map((f) => readFileSync(path.join(here, 'src', f), 'utf8')).join('\n');
 const tpl = readFileSync(path.join(here, 'template.html'), 'utf8');
