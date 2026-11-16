@@ -22,16 +22,17 @@ const B = {
   gF: 0, gR: 0, slip: 0, speed: 0, vlong: 0, air: 0, crash: 0, land: 0, thr: 0, cut: 0, hard: 0, wing: 0, wingOn: 0, alpha: 0, fuel: 1, bst: 0, armed: 1, wp: 0, wr: 0, trim: 0, wdep: 0, tk: 0, sf: 0,
   ps: 0, pre: 0, soft: 0, stl: 0, ovl: 0, folded: 0, fold: 0, ft: 0, turb: 0, ge: 0, // power slide, jump preload, softness of the sand under the wheels, stall (signed: which wing dropped), overload timer, wing tips folded (flag, eased, recovery timer), rough air, ground effect
   ct: 0, lift: 0, flap: 0, flapOn: 0, // time since the crash began, rising air under the wings (m/s), lower wings out 0..1 and asked for
+  lq: 0, lrel: 0, bury: 0, hi: 0, // how the last landing went (0 none, 1 heavy, 2 clean, 3 perfect), nose above the slope when it touched (rad), how deep the wheels are buried, how far into the rough high air
   wy: 0, yh: 0, rot: 0, flips: 0, free: 0, imp: 0, bog: 0, // rudder, heading hold, pitch turned through this airtime, flips landed, flip armed, impact speed, landing bog
 };
 // input: throttle 0..1, brake 0..1, steer -1..1
-const IN = { thr: 0, brk: 0, steer: 0, boost: 0, yaw: 0, lean: 0 }; // lean: rider's weight, +1 forward, -1 back
+const IN = { thr: 0, brk: 0, steer: 0, boost: 0, yaw: 0, lean: 0, tuck: 0 }; // tuck: wings pulled in for a dive (F held); // lean: rider's weight, +1 forward, -1 back
 
 function resetBike(x, z, yaw) {
   B.x = x; B.z = z; B.y = heightAt(x, z) + BK.L + BK.Rr + 0.05; B.vx = B.vy = B.vz = 0; B.yaw = yaw; B.pitch = 0; B.q = B.r = 0;
   B.lean = B.steer = 0; B.cF = B.cR = 0; B.wR = 0; B.crash = 0; B.air = 0; B.land = 0; B.cut = 0; B.hard = 0; B.wing = 0; B.wingOn = 0; B.fuel = 1; B.bst = 0; B.armed = 1; B.wp = 0; B.wr = 0; B.wdep = 0; B.tk = 0; B.sf = 0;
   B.ct = 0; B.lift = 0; B.flap = 0; B.flapOn = 0; B.ps = 0; B.pre = 0; B.soft = 0; B.stl = 0; B.ovl = 0; B.folded = 0; B.fold = 0; B.ft = 0; B.turb = 0; B.ge = 0;
-  B.wy = 0; B.yh = 0; B.rot = 0; B.flips = 0; B.free = 0; B.imp = 0; B.bog = 0;
+  B.wy = 0; B.yh = 0; B.rot = 0; B.flips = 0; B.free = 0; B.imp = 0; B.bog = 0; B.lq = 0; B.lrel = 0; B.bury = 0; B.hi = 0;
 }
 
 // ---- the air itself. A steady wind blows toward +x: it is pushed up the windward faces of the dunes (ridge lift) and
@@ -41,18 +42,18 @@ function resetBike(x, z, yaw) {
 const THN = 8, THC = TILE / THN, THERM = new Float32Array(THN * THN * 4), WIND = 13; // per square: x, z, radius, strength in m/s (0 = none)
 {
   let s = 977 + WS; const r = () => { s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff; return s / 0x7fffffff; };
-  for (let i = 0; i < THN * THN; i++) { const on = r() < 0.45; THERM[i * 4] = ((i % THN) + 0.2 + 0.6 * r()) * THC; THERM[i * 4 + 1] = (floor(i / THN) + 0.2 + 0.6 * r()) * THC; THERM[i * 4 + 2] = 70 + 50 * r(); THERM[i * 4 + 3] = on ? 5 + 4 * r() : 0; }
+  for (let i = 0; i < THN * THN; i++) { const on = r() < 0.7; THERM[i * 4] = ((i % THN) + 0.2 + 0.6 * r()) * THC; THERM[i * 4 + 1] = (floor(i / THN) + 0.2 + 0.6 * r()) * THC; THERM[i * 4 + 2] = 90 + 60 * r(); THERM[i * 4 + 3] = on ? 5 + 4 * r() : 0; }
 }
 let STILL = 0; // the simulations set this for still air, so their numbers are about the bike and not the weather
-let _hag = 0, _gst = 0, _turb = 0, _T = 0; // height above the ground, sideways gust, how rough the air is, the clock the gusts run on
+let _hag = 0, _gst = 0, _turb = 0, _T = 0, _hi = 0; // height above the ground, sideways gust, how rough the air is, the clock the gusts run on
 function airUp(x, y, z) {
-  const hag = max(y - heightAt(x, z), 0); _hag = hag; _gst = 0; _turb = 0;
+  const hag = max(y - heightAt(x, z), 0); _hag = hag; _gst = 0; _turb = 0; _hi = 0;
   if (STILL) return 0;
-  const rl = clamp(WIND * (heightAt(x + 40, z) - heightAt(x - 40, z)) / 80, -3, 7) * exp(-hag / 70);
+  const rl = clamp(1.25 * WIND * (heightAt(x + 40, z) - heightAt(x - 40, z)) / 80, -3, 9) * exp(-hag / 110);
   let w = rl, edge = 0;
   const day = sstep(0.05, 0.5, SUN[1]);
   if (day > 0) {
-    const ci = floor(x / THC), cj = floor(z / THC), top = sstep(3, 40, hag) * (1 - sstep(500, 700, hag)) * day;
+    const ci = floor(x / THC), cj = floor(z / THC), top = sstep(2, 20, hag) * (1 - sstep(500, 700, hag)) * day;
     for (let j = cj - 1; j <= cj + 1; j++) for (let i = ci - 1; i <= ci + 1; i++) {
       const k = ((i & 7) + (j & 7) * THN) * 4, S = THERM[k + 3]; if (!S) continue;
       const dx = x - THERM[k] - (i - (i & 7)) * THC - hag * 0.12, dz = z - THERM[k + 1] - (j - (j & 7)) * THC, d2 = (dx * dx + dz * dz) / (THERM[k + 2] * THERM[k + 2]);
@@ -60,7 +61,9 @@ function airUp(x, y, z) {
     }
   }
   // gusts: the air is never quite steady, and it is rough in the tumbling air behind a crest and at the edge of a thermal
-  const T = 0.25 + max(-rl, 0) * 0.6 + edge * 0.35;
+  // high up the air is another thing altogether: above about 150 m it gets rougher with every metre, and by 500 m it throws the bike about
+  const hi = sstep(150, 500, hag); _hi = hi;
+  const T = (0.25 + max(-rl, 0) * 0.6 + edge * 0.35) * (1 + 5 * hi) + 1.2 * hi;
   _turb = T; _gst = sin(_T * 1.7 + z * 0.06 + 1.3) * sin(_T * 3.1 + x * 0.03) * T;
   return w + (sin(_T * 2.3 + x * 0.05) * sin(_T * 1.3 + z * 0.04) + 0.5 * sin(_T * 5.9 + x * 0.11 + z * 0.07)) * T * 1.2;
 }
@@ -126,7 +129,11 @@ function wheel(zw, R, st, drive, brk, fX, fY, fZ, uX, uY, uZ, rX, rZ) {
   // velocity of the axle: body velocity + pitch and yaw rotation
   const pvx = B.vx + B.q * (zw * uX + k.L * fX) + B.r * zw * rX, pvy = B.vy + B.q * (zw * uY + k.L * fY), pvz = B.vz + B.q * (zw * uZ + k.L * fZ) + B.r * zw * rZ;
   const vn = pvx * nx + pvy * ny + pvz * nz;
-  if (vn < -k.hard && B.air > 0.3) B.hard = 1; // came down flat from too high
+  // the sand is not all the same: lee faces are loose avalanche sand that swallows the wheel and gives little to push
+  // against, windward faces are a wind-packed crust that rolls easy and grips, pans and ramps are hardpack
+  const pack = RMK[(round(ax * 0.5) & HM) + (round(az * 0.5) & HM) * HN], lee = nx / max(ny, 0.3), soft = sstep(0.2, 0.5, lee) * (1 - pack) * k.softK, firm = lee < -0.05 ? 1 - pack : 0, grip = (1 - 0.22 * soft) * (1 + 0.1 * firm);
+  if (soft > _soft) _soft = soft;
+  if (vn < -k.hard * (1 + 0.35 * soft) && B.air > 0.3) B.hard = 1; // (loose sand forgives a harder hit) // came down flat from too high
   if (B.air > 0.2 && -vn > B.imp) B.imp = -vn; // how hard this landing hit
   let Fs = k.k * comp + (comp > k.travel ? k.k2 * (comp - k.travel) : 0) - k.c * (vn > 0 ? k.reb : 1) * vn;
   if (Fs < 0) Fs = 0; else if (Fs > 30000) Fs = 30000;
@@ -138,12 +145,8 @@ function wheel(zw, R, st, drive, brk, fX, fY, fZ, uX, uY, uZ, rX, rZ) {
   const vl = pvx * hx + pvy * hy + pvz * hz, vs = pvx * lx + pvy * ly + pvz * lz;
   // along the wheel: drive, brake, rolling resistance of soft sand; limited by grip
   // packed sand (ramps and pans) drags far less than soft sand
-  const roll = clamp(vl * 2, -1, 1), pack = RMK[(round(ax * 0.5) & HM) + (round(az * 0.5) & HM) * HN];
-  // the sand is not all the same: lee faces are loose avalanche sand that swallows the wheel and gives little to push
-  // against, windward faces are a wind-packed crust that grips a little better, pans and ramps are hardpack
-  const lee = nx / max(ny, 0.3), soft = sstep(0.2, 0.5, lee) * (1 - pack) * k.softK, grip = (1 - 0.18 * soft) * (lee < -0.05 ? 1.08 : 1);
-  if (soft > _soft) _soft = soft;
-  let Fl = drive - (brk + k.crr * (1 - 0.6 * pack) * (1 + 1.8 * soft) * (1 + 3 * B.bog) * Fs) * roll; // (a wheel that has just landed is dug in)
+  const roll = clamp(vl * 2, -1, 1);
+  let Fl = drive - (brk + min(0.6, k.crr * (1 - 0.6 * pack) * (1 + 3.2 * soft) * (1 - 0.3 * firm) * (1 + 3 * B.bog) * (1 + 2.5 * B.bury)) * Fs) * roll; // (a wheel that has just landed is dug in)
   const lim = k.mu * Fs * grip;
   if (drive > lim) _ws = (drive - lim) / drive;
   Fl = clamp(Fl, -lim, lim);
@@ -180,7 +183,7 @@ function stepBike(dt) {
   B.thr += (IN.thr - B.thr) * min(1, dt * 12);
   _fx = 0; _fy = -k.m * 9.81; _fz = 0; _tp = 0; _ty = 0;
   // the rider rolls off the throttle as the front comes up, and eases it in a turn so the front tyre keeps its bite
-  const drive = B.thr * (1 - B.cut) * (1 - 0.6 * B.bog) * (1 - 0.4 * B.sf * sstep(4, 9, vlong) * (1 - B.ps)) * min(k.Fmax, k.P / max(vlong, 1));
+  const drive = B.thr * (1 - B.cut) * (1 - 0.6 * B.bog) * (1 - 0.45 * B.bury) * (1 - 0.4 * B.sf * sstep(4, 9, vlong) * (1 - B.ps)) * min(k.Fmax, k.P / max(vlong, 1));
   _soft = 0; _lat = 1 - 0.72 * B.ps; _T += dt;
   B.cR = wheel(-k.b, k.Rr, 0, drive, IN.brk * k.brake * 0.45 * (1 - B.ps), fX, fY, fZ, uX, uY, uZ, rX, rZ); B.gR = _wg; B.slip = max(_ws, B.ps * 0.7);
   _lat = 1;
@@ -205,7 +208,7 @@ function stepBike(dt) {
     // weight forward as the bike leaves the ground soaks up the lip: less height, nose held down
     if (B.air === 0 && IN.lean > 0 && B.vy > 1) B.vy *= 1 - 0.28 * IN.lean;
     B.pre = 0;
-    _tp += mix(B.thr * 1.0 - IN.brk * 1.8 - IN.lean * 0.8 + dp * 3.5 - B.q * 2.2, inp ? (inp * 5.5 - B.q) * 7 : dp * 14 - B.q * 6, fl) * k.Ip * (1 - B.wing);
+    _tp += mix(B.thr * 1.0 - IN.brk * 1.8 - IN.lean * 0.8 + dp * 3.5 - B.q * 2.2, inp ? (inp * 5.5 - B.q) * 7 : (dp - IN.lean * 0.4) * 14 - B.q * 6, fl) * k.Ip * (1 - B.wing);
     B.rot += B.q * dt;
     // steering whips the bike round in the air; hands off, it swings back to face the way it is travelling, ready to land.
     // The tail fin (Q and E) turns it flat and slowly, like a helicopter's pedals, and the heading it is left on is held for a moment.
@@ -217,7 +220,16 @@ function stepBike(dt) {
     // touchdown: how hard it hit sets the thump, the dust and the bog. The sand takes a bite out of the speed,
     // the engine labours for a moment and the dug-in tyres drag, so the bike arrives rather than skips.
     if (B.air > 0.35) {
-      B.land = clamp(B.imp / 9, 0.2, 1.5); B.bog = min(1, B.land); const sc = 1 - 0.06 * B.bog; B.vx *= sc; B.vz *= sc;
+      // How it lands is graded. Come down a slope that falls away at the angle the bike is falling, with the wheels
+      // lined up to it and pointing the way it is going, and the ground takes almost nothing: the speed is kept.
+      // Land flat, nose-high or crabbed and the sand takes its bite. Loose sand swallows the wheels to the axles.
+      groundNormal(B.x, B.z);
+      const lr = B.pitch - Math.asin(clamp(-(_gn[0] * sy + _gn[2] * cy), -1, 1)); let yv = hypot(B.vx, B.vz) > 3 ? Math.atan2(B.vx, B.vz) - B.yaw : 0; yv -= round(yv / TAU) * TAU;
+      const bad = max(B.imp / 7, max(abs(lr) / 0.16, abs(yv) / 0.22));
+      B.lrel = lr; B.lq = B.air < 0.8 ? 0 : bad < 1 ? 3 : bad < 2 ? 2 : 1;
+      B.land = clamp(B.imp / 9, 0.2, 1.5) * (B.lq === 3 ? 0.5 : 1); B.bog = min(1, B.land) * (B.lq === 3 ? 0.15 : B.lq === 2 ? 0.6 : 1);
+      B.bury = max(B.bury, _soft * clamp(B.imp / 7, 0.3, 1) * (B.lq === 3 ? 0.4 : 1));
+      const sc = 1 - 0.06 * B.bog - 0.22 * B.bury; B.vx *= sc; B.vz *= sc;
       B.flips = floor(abs(B.rot) / TAU + 0.2) * (B.rot > 0 ? 1 : -1);
     }
     B.air = 0; B.imp = 0; B.rot = 0; B.free = 0; B.yh = 0;
@@ -248,13 +260,13 @@ function stepBike(dt) {
   // So speed built on a flat, or in a stoop with the wings pulled in, is what makes a burn worth having.
   const thrust = min(k.rocket + k.ram * spd, k.rocketMax) * B.bst;
   _fx += fX * thrust; _fy += fY * thrust; _fz += fZ * thrust;
-  B.bog *= exp(-dt * 3.5); B.wy += clamp((grounded ? 0 : IN.yaw) - B.wy, -dt * 4, dt * 4);
+  B.bog *= exp(-dt * 3.5); B.bury *= exp(-dt * (0.5 + 1.6 * B.thr)); // (buried wheels are dug out with the throttle) B.wy += clamp((grounded ? 0 : IN.yaw) - B.wy, -dt * 4, dt * 4);
   // ---- wings: they take about half a second to fold out or away
-  // Like a falcon: with the wings out, holding the throttle pulls them most of the way in (a stoop: little lift,
+  // Like a falcon: with the wings out, holding F (IN.tuck) pulls them most of the way in (a stoop: little lift,
   // little drag, the nose drops and speed builds); letting go spreads them and the speed turns back into lift.
   // B.wdep is whether the wings are unfolded at all, B.tk how far they are tucked, B.wing how much wing is in the air.
   B.wdep += clamp((B.wingOn ? 1 : 0) - B.wdep, -dt * 2, dt * 2);
-  B.tk += clamp((B.wingOn && B.air > 0.7 ? IN.thr : 0) - B.tk, -dt * 2.5, dt * 2.5); // (not in the first moment off a ramp or a runway, when the throttle is still open from the ground)
+  B.tk += clamp((B.wingOn && B.air > 0.7 ? IN.tuck : 0) - B.tk, -dt * 2.5, dt * 2.5); // (not in the first moment off a ramp or a runway, when the throttle is still open from the ground)
   B.wing += clamp(B.wdep * (1 - 0.75 * B.tk) - B.wing, -dt * 2.5, dt * 2.5);
   B.flap += clamp((B.flapOn ? B.wdep : 0) - B.flap, -dt * 2, dt * 2); // the lower pair of wings
   B.lift = 0; B.turb = 0; B.ge = 0;
@@ -265,20 +277,21 @@ function stepBike(dt) {
     B.lift = airUp(B.x, B.y, B.z);
     const avy = B.vy - B.lift, as = hypot(B.vx, avy, B.vz);
     // the controls ease toward what is asked rather than snapping, so a tap is a nudge and a hold is full deflection
-    B.wp += clamp(IN.brk - IN.thr * 0.9 - B.wp, -dt * 2.4, dt * 2.4); B.wr += clamp(IN.steer - B.wr, -dt * 2.6, dt * 2.6);
+    B.wp += clamp(IN.brk - IN.tuck * 0.9 - B.wp, -dt * 2.4, dt * 2.4); B.wr += clamp(IN.steer - B.wr, -dt * 2.6, dt * 2.6);
     // the lower wings add six tenths as much area again, and their own drag
     const w = B.wing, qd = 0.6 * as * as, ivx = B.vx / as, ivy = avy / as, ivz = B.vz / as, S = k.wingS * w * (1 + 0.6 * B.flap) * (1 - 0.4 * B.fold), cd0 = 0.035 + 0.03 * B.flap;
     // ground effect: within a wingspan of the sand the air is squeezed under the wings, so they lift more and drag less for it
     const ge = clamp(1 - max(_hag - 0.4, 0) / 5.5, 0, 1), ge2 = ge * ge, ki = 0.05 * (1 - 0.5 * ge2);
     B.ge = ge2; B.turb = _turb;
     // angle of attack: how far the nose points above the flight path (the wings sit at a slight angle on the bike)
-    const vf = ivx * fX + ivy * fY + ivz * fZ, vu = ivx * uX + ivy * uY + ivz * uZ, alpha = Math.atan2(-vu, max(vf, 0.05)) + 0.06;
+    const vf = ivx * fX + ivy * fY + ivz * fZ, vu = ivx * uX + ivy * uY + ivz * uZ, alpha = Math.atan2(-vu, max(vf, 0.05)) + 0.06 + _gst * 0.03, aS = 0.32 - 0.12 * _hi; // (high up the wings let go sooner, and the gusts tip them past it)
+    B.hi = _hi;
     // lift rises with the angle until the wing stalls; drag is the wing's own plus what making lift costs
     let cl = clamp(4.4 * alpha, -0.5, 1.35) * (1 + 0.22 * ge2), cd = cd0 + cl * cl * ki;
-    if (alpha > 0.32) { cl *= max(0.45, 1 - (alpha - 0.32) * 3); cd += (alpha - 0.32) * 1.5; }
+    if (alpha > aS) { cl *= max(0.45, 1 - (alpha - aS) * 3); cd += (alpha - aS) * 1.5; }
     // stall: past that angle the wings let go, and never both at once. One drops, the bike rolls and yaws toward it and
     // the nose falls. It flies again once the angle is back under control, which means letting the nose go down.
-    if (alpha > 0.32 && !grounded) { if (!B.stl) B.stl = B.lean < 0 || (B.lean === 0 && B.r < 0) ? -0.05 : 0.05; B.stl = clamp(B.stl + (B.stl > 0 ? 1 : -1) * dt * 1.4, -1, 1); }
+    if (alpha > aS && !grounded) { if (!B.stl) B.stl = B.lean < 0 || (B.lean === 0 && B.r < 0) ? -0.05 : 0.05; B.stl = clamp(B.stl + (B.stl > 0 ? 1 : -1) * dt * 1.4 * (1 + 1.5 * _hi), -1, 1); }
     else if (B.stl) { const n = abs(B.stl) - dt * 1.5; B.stl = n > 0 ? (B.stl > 0 ? n : -n) : 0; }
     // wing loading: ask the wings for more than about 2.7 g for half a second and the tip sections fold back.
     // They stay folded, with four tenths of the wing gone, until the bike has been slow and gentle for a second.
@@ -296,7 +309,7 @@ function stepBike(dt) {
     const vr = ivx * rX + ivz * rZ, Sf = -qd * 3 * vr * B.wdep; _fx += rX * Sf; _fz += rZ * Sf;
     B.alpha = alpha;
     if (!grounded) {
-      // the tail holds the nose near the flight path: brake pulls up (flare), throttle pushes over (dive)
+      // the tail holds the nose near the flight path: brake pulls up (flare), tucking pushes over (dive)
       const auth = min(1, qd / 220) * w;
       _tp += ((0.14 + B.trim + 0.18 * B.wp - alpha + 0.06) * 10 - B.q * 4.5) * k.Ip * auth - abs(B.stl) * 1.6 * k.Ip * w;
       // and the bike weathervanes to face where it is going

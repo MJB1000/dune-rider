@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = ['math.js', 'terrain.js', 'physics.js'].map((f) => readFileSync(path.join(here, 'src', f), 'utf8')).join('\n');
 await new Function(src + `return (async()=>{await buildTerrain(async()=>{}); STILL=1;
- const ks=[]; for(let c=0;c<KNC*KNC;c++) if(KK[c*5+3]>0.05) ks.push([KK[c*5],KK[c*5+1],KK[c*5+2],KK[c*5+3],KK[c*5+4]]);
+ const ks=[]; for(let c=0;c<KNK;c++) if(KK[c*5+3]>0.05) ks.push([KK[c*5],KK[c*5+1],KK[c*5+2],KK[c*5+3],KK[c*5+4]]);
  console.log(ks.length,'kickers; heights',ks.map(k=>k[3].toFixed(0)).join(' '));
  let ok=0,airs=[],sum=0;
  ks.forEach((k,i)=>{ const [cx,cz,L,H]=k; let back=L+20; while(back<L+260&&panAt(cx-back-10,cz)>0.98&&kickH(cx-back-10,cz)===0) back+=10;

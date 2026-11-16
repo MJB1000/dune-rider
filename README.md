@@ -36,9 +36,9 @@ On a phone or tablet the game switches itself to touch: a stick under the left t
 | Brake | `S`, `↓` or `Space` | Left trigger |
 | Steer | `A` `D` or `←` `→` | Left stick |
 | Power slide: throttle and brake together in a turn | `W` + `S` | Both triggers |
-| Rider weight forward / back (hold back and let go to spring off a lip) | `I` `K` | Right stick |
+| Rider weight forward / back (hold back and let go to spring off a lip; in the air it tips the nose down / up to line up a landing) | `I` `K` | Right stick |
 | Rocket boost (hold; a full bar is 3 s, refills in 15 s) | `Shift` | A button |
-| Wings: tap for main wings, tap again to add the lower pair, tap again to stow. Hold to put them out (or in) only while held | `F` | |
+| Wings: tap for main wings, tap again to add the lower pair, tap again to stow. With the wings out, hold to pull them in and dive; let go to spread them | `F` | |
 | Tail fin: swing the nose left / right in the air | `Q` `E` | Shoulder buttons |
 | Wing trim, nose up / down | `Z` `X` | |
 | Reset the bike | `R` | |
@@ -48,17 +48,19 @@ On a phone or tablet the game switches itself to touch: a stick under the left t
 | Mute | `M` | |
 | Pause | `Esc` | |
 
-In the air the throttle lifts the nose and the brake drops it, like a real bike. With the wings out it flies like a falcon: hold throttle to pull the wings in and stoop for speed, let go to spread them and turn the speed into lift, brake to pull up and flare, steer to bank. Every stoop costs a little height. Time in the air scores 100 points a second if you land it.
+In the air the throttle lifts the nose and the brake drops it, like a real bike. With the wings out it flies like a falcon: hold `F` to pull the wings in and stoop for speed, let go to spread them and turn the speed into lift, brake to pull up and flare, steer to bank. Every stoop costs a little height. Time in the air scores 100 points a second if you land it.
 
 Flips: with the wings away and more than about 5 m of air under you, let go of throttle and brake, then hold throttle to go over backward or brake to go over forward. One turn takes about 1.2 seconds; let go and the rider levels the bike. Each flip you land is worth 500 points. Throttle held from the ground does not start a flip.
 
-The air moves. A steady wind is pushed up the windward faces of the dunes and sinks behind them, and by day columns of warm air rise off the sand, each marked by a dust devil. With the wings out the readout shows your climb rate and whether you are in lift or sink. The lower wings (a second press of `F`) add area: slower flight and a quarter less sink, which is what lets you circle inside a thermal and climb.
+The air moves. A steady wind is pushed up the windward faces of the dunes and sinks behind them, and by day columns of warm air rise off the sand, each marked by a dust devil. They are common (about two squares in three have one), 90 to 150 m across, and can be felt from 10 m up. With the wings out the readout shows your climb rate and whether you are in lift or sink. The lower wings (a second press of `F`) add area: slower flight and a quarter less sink, which is what lets you circle inside a thermal and climb.
 
 Proximity: gliding fast within 12 m of the sand scores more the closer you are, banked with the air time when you land.
 
+Landings are graded. Coming down without wings, the readout shows the slope you are about to meet and how the nose sits against it; `I` drops the nose, `K` lifts it. Meet a slope that falls away at the angle you are falling, wheels lined up and pointing where you are going, and it is a perfect landing: no speed lost, the points for that air time are worth half as much again, and 1 s is added to the air bank. A clean landing loses a little; a heavy one (flat ground from high up, nose high or low, or sideways) bogs the bike as before. The kickers on the pans are built for it: off the lip at about 75 to 80 km/h puts you on the landing slope.
+
 Crashes: the rider is thrown and tumbles, the bike slides and spins, and both carry on down a slope until they stop. Each hard hit breaks bones, and the tally is kept.
 
-Finer points. The sand varies: lee faces are loose and swallow the wheels, windward faces are a firmer crust, pans and ramps are hardpack. Weight forward (`I`) loads the front tyre and soaks up a lip; weight back (`K`) lightens the front, and holding it then letting go springs the bike into the air. Pull the wings past their stalling angle and one drops: let the nose fall to fly again. Within a wingspan of the sand the wings lift more (ground effect). The air is rough behind crests and at the edges of thermals. Pull harder than about 2.7 g for half a second and the wing tips fold back until you have flown slowly for a second.
+Finer points. The sand varies. The back (lee) face of a dune is loose: it drags hard, forgives a harder hit, and a landing there buries the wheels, which costs speed until you dig out with the throttle. The windward face you climb is a firm crust that rolls easily and grips. Pans and ramps are hardpack. Weight forward (`I`) loads the front tyre and soaks up a lip; weight back (`K`) lightens the front, and holding it then letting go springs the bike into the air. Pull the wings past their stalling angle and one drops: let the nose fall to fly again. Within a wingspan of the sand the wings lift more (ground effect). The air is rough behind crests and at the edges of thermals, and far rougher high up: above about 150 m it worsens with every metre and the wings stall at a smaller angle, so by 500 m the bike is thrown about and will not hold a pull. Pull harder than about 2.7 g for half a second and the wing tips fold back until you have flown slowly for a second.
 
 The tail fin (`Q` `E`) turns the bike flat, the way a helicopter's pedals do. With the wings out it is the fine control: a held fin turns the flight path about 4 degrees a second without banking.
 
@@ -74,7 +76,7 @@ The booster is a bar: hold `Shift` to burn, let go to keep the rest. A full bar 
 - **Bike**: a rigid body on two sprung wheels stepped at 240 Hz, with grip limits, wheelspin, weight transfer and jumps. Full steering asks for the tightest turn the tyres can hold at that speed, the rider eases the throttle and shifts forward in a turn, and steers against a slide. A landing stays down: the dampers hold the bike on the ground, the sand takes a bite out of the speed, the engine labours for a moment, and the view drops and shakes with the hit. Tyre tracks and dust follow the wheels.
 - **Ramps**: four dunes in ten have a graded strip of packed sand that leads straight to the crest and ends in a lip.
 - **Pans**: about an eighth of the field is hard, dead-flat ground, the longest straight about 500 m, where the dunes shrink away to nothing. You start on one. Packed ground rolls easier than soft sand.
-- **Kickers**: about twenty medium ramp dunes stand alone on the pans, 6 to 14 m tall, each a graded run-up along the wind that ends in a lip. Flat out off one is about 2 s of air.
+- **Kickers**: medium ramp dunes stand alone on the pans (16 in the default world), 6 to 14 m tall, built like tabletop jumps: a graded run-up along the wind to a lip, a flat top, then a landing slope. Flat out clears the lot for about 2 s of air and a heavy landing; the right speed lands on the slope.
 - **Rocket boosters**: two pods on the tail. A 3-second tank shown as a bar, stronger the faster you are moving, that refills in 15 seconds on the ground and 45 in the air.
 - **Wings**: three metal sections a side flip out from the frame behind the steering head, with tail fins off the rear fender and an upright rudder that stands up when the bike leaves the ground. The brushed skins catch the sun: a soft sheen, and points of light that flash and move as the wing banks. Launch off a crest with speed and the bike glides at about 6.6 to 1.
 - **Sound**: a synthesized single-cylinder engine and wind.
@@ -89,7 +91,7 @@ npm install
 npm run build
 ```
 
-`npm run build:dev` writes an unminified `dev.html` instead. `npm test` runs the terrain and physics headless and prints speeds, air time and crashes. `node ramps.mjs` rides every megadune ramp. `node kickers.mjs` rides every kicker on the pans. `node falcon.mjs` flies stoop-and-climb cycles. `node handling.mjs` measures cornering, braking, runway take-off and what a burn is worth with the wings in each position. `node sim.mjs` runs the longer stress simulations described in [`BRIEF.md`](BRIEF.md), which is the plan for what gets built next.
+`npm run build:dev` writes an unminified `dev.html` instead. `npm test` runs the terrain and physics headless and prints speeds, air time and crashes. `node ramps.mjs` rides every megadune ramp. `node kickers.mjs` rides every kicker on the pans. `node landing.mjs` grades the landings off every kicker and ramp. `node falcon.mjs` flies stoop-and-climb cycles. `node handling.mjs` measures cornering, braking, runway take-off and what a burn is worth with the wings in each position. `node sim.mjs` runs the longer stress simulations described in [`BRIEF.md`](BRIEF.md), which is the plan for what gets built next.
 
 | File | What's inside |
 |---|---|

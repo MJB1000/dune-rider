@@ -22,27 +22,30 @@ let TH, HZ0, HZ1; // heights (m), TN x TN; skyline slope toward sunrise / sunset
 
 const megaN = (u, v) => pfbm(u * 2 + 0.37, v * 2 + 0.11, 2, 2, 301 + WS); // where the megadunes are tall (high) or give out (low)
 const panAt = (x, z) => 1 - sstep(PAN0, PAN1, megaN(x / TILE, z / TILE)); // 1 on a pan, 0 among the dunes
-// Kickers: medium ramp dunes standing alone on the pans. The field is cut into 128 m cells; seven in ten get one where
-// the whole of it fits on a pan. Each is a graded run-up along the wind (+x) 63 to 81 m long that ends in a lip 6 to
-// 14 m up, with a slip face behind it. Worked out once per cell: crest x, crest z, run-up length, height, half width.
-const KC = 128, KNC = TILE / KC; let KK = null;
+// Kickers: medium ramp dunes standing alone on the pans, built like a tabletop jump. The field is cut into cells
+// 256 m along the wind by 128 m across it; most get one where it fits on a pan. Each is a graded run-up along the
+// wind (+x) 63 to 73 m long to a lip 6 to 14 m up, a flat top, then a landing slope of about 20 degrees. Come off the
+// lip at the right speed and the bike meets that slope falling at nearly the same angle; too slow lands on the flat
+// top, too fast clears the lot. Worked out once per cell: crest x, crest z, run-up length, height, half width.
+const KCX = 256, KCZ = 128, KNX = TILE / KCX, KNZ = TILE / KCZ, KNK = KNX * KNZ; let KK = null;
 const kickInit = () => {
-  KK = new Float32Array(KNC * KNC * 5);
-  for (let cj = 0; cj < KNC; cj++) for (let ci = 0; ci < KNC; ci++) {
-    if (ihash(ci, cj, 431 + WS) > 0.7) continue;
-    const o = (ci + cj * KNC) * 5, H = 6 + 8 * ihash(ci, cj, 433 + WS), L = 50 + 2.2 * H, hw = 13 + 8 * ihash(ci, cj, 439 + WS);
-    const cx = ci * KC + 84 + 20 * ihash(ci, cj, 443 + WS), cz = cj * KC + 64 + 56 * (ihash(ci, cj, 449 + WS) - 0.5);
+  KK = new Float32Array(KNK * 5);
+  for (let cj = 0; cj < KNZ; cj++) for (let ci = 0; ci < KNX; ci++) {
+    if (ihash(ci, cj, 431 + WS) > 0.85) continue;
+    const o = (ci + cj * KNX) * 5, H = 6 + 8 * ihash(ci, cj, 433 + WS), L = 55 + 1.3 * H, hw = 14 + 8 * ihash(ci, cj, 439 + WS);
+    const cx = ci * KCX + 90 + 40 * ihash(ci, cj, 443 + WS), cz = cj * KCZ + 64 + 52 * (ihash(ci, cj, 449 + WS) - 0.5);
     KK[o] = cx; KK[o + 1] = cz; KK[o + 2] = L; KK[o + 4] = hw;
-    KK[o + 3] = H * sstep(0.6, 1, min(panAt(cx, cz), min(panAt(cx - L, cz), panAt(cx + H * 1.7, cz))));
+    KK[o + 3] = H * sstep(0.5, 1, min(panAt(cx, cz), min(panAt(cx - L, cz), panAt(cx + 12 + 2 * H, cz))));
   }
 };
 const kickH = (x, z) => {
   if (!KK) kickInit();
-  const xx = ((x % TILE) + TILE) % TILE, zz = ((z % TILE) + TILE) % TILE, o = (floor(xx / KC) + floor(zz / KC) * KNC) * 5, H = KK[o + 3];
+  const xx = ((x % TILE) + TILE) % TILE, zz = ((z % TILE) + TILE) % TILE, o = (floor(xx / KCX) + floor(zz / KCZ) * KNX) * 5, H = KK[o + 3];
   if (H < 0.05) return 0;
   const dx = xx - KK[o], hw = KK[o + 4], lat = 1 - sstep(hw * 0.45, hw, abs(zz - KK[o + 1]));
   if (lat <= 0) return 0;
-  return H * lat * mix(pow(clamp(1 + dx / KK[o + 2], 0, 1), 1.7), pow(1 - clamp(dx / (H * 1.7), 0, 1), 1.15), sstep(-1, 1, dx));
+  const s = clamp((dx - 10 - 0.5 * H) / (3.2 * H), 0, 1); // along the landing slope, past the flat top
+  return H * lat * mix(pow(clamp(1 + dx / KK[o + 2], 0, 1), 1.5), 1 - 0.5 * (s + s * s * (3 - 2 * s)), sstep(-1, 1, dx));
 };
 // height of the dune field at (x, z) in metres; periodic over TILE. The wind blows along +x:
 // long gentle climbs on the windward side, a sharp crest, then a steep slip face.

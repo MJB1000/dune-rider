@@ -364,7 +364,7 @@ addEventListener('keydown', (e) => {
   else if (e.code === 'KeyR' && playing) resetBike(B.x, B.z, B.yaw);
   else if (e.code === 'KeyF' && playing && !e.repeat && B.crash <= 0) {
     // a tap steps through: no wings, main wings, main and lower wings, no wings. Held, it is a momentary switch:
-    // wings out for as long as it is down if they were away, away for as long as it is down if they were out.
+    // wings out for as long as it is down if they were away; pulled in for a dive for as long as it is down if they were out.
     if (!has(1)) { say('wings: land ' + Math.ceil(KIT[1][0] - SAVE.total) + ' s more air to unlock'); return; }
     fT = performance.now(); fW = B.wingOn; fF = B.flapOn; fTemp = 0;
     if (!fW) { B.wingOn = 1; B.flapOn = 0; soundWings(1); say('wings out'); }
@@ -383,15 +383,16 @@ addEventListener('keyup', (e) => {
     const held = performance.now() - fT; fT = -1;
     if (!playing || B.crash > 0) return;
     if (!fW) { if (held > 300) { B.wingOn = 0; B.flapOn = 0; soundWings(0); say('wings away'); } }            // was away: a hold puts them back, a tap leaves the main wings out
-    else if (fTemp) { B.wingOn = 1; B.flapOn = fF; soundWings(1); say(fF ? 'second wings out' : 'wings out'); } // was out and held: back as they were
+    else if (fTemp) say('wings spread');                                                                         // was out and held: that was a dive, they spread again
     else if (!fF && has(3)) { B.flapOn = 1; soundWings(1); say('second wings out'); }                                     // tap with the main wings out: add the lower pair
     else { B.wingOn = 0; B.flapOn = 0; soundWings(0); say('wings away'); }                                      // tap with both out: all away
   }
 });
 addEventListener('blur', () => { fT = -1; for (const k in K) K[k] = 0; if (playing) pause(); });
 function readInput() {
-  // F held past a fifth of a second with the wings out: fold them for as long as it stays down
-  if (fT >= 0 && fW && !fTemp && performance.now() - fT > 220 && B.crash <= 0) { fTemp = 1; B.wingOn = 0; soundWings(0); say('wings in (hold)'); }
+  // F held past a fifth of a second with the wings out: pull them in and dive for as long as it stays down
+  if (fT >= 0 && fW && !fTemp && performance.now() - fT > 220 && B.crash <= 0) { fTemp = 1; say('dive (hold F)'); }
+  IN.tuck = fT >= 0 && fTemp && B.wingOn ? 1 : 0;
   let thr = K.KeyW || K.ArrowUp ? 1 : 0, brk = K.KeyS || K.ArrowDown || K.Space ? 1 : 0, st = (K.KeyD || K.ArrowRight ? 1 : 0) - (K.KeyA || K.ArrowLeft ? 1 : 0);
   const gp = navigator.getGamepads ? navigator.getGamepads()[0] : null;
   if (gp) {
@@ -409,7 +410,7 @@ function readInput() {
   if (benching) {
     // the scripted ride: flat out, weaving, a boost and a glide, half in each view
     const w = sin(benchT * 0.9); IN.thr = B.wingOn ? 0 : 1; IN.brk = 0; IN.steer = w > 0.6 ? 1 : w < -0.6 ? -1 : 0;
-    IN.boost = (benchT > 6 && benchT < 8) || (benchT > 17 && benchT < 19) ? 1 : 0; IN.yaw = 0; IN.lean = 0; B.wingOn = B.air > 0.5 ? 1 : B.air === 0 ? 0 : B.wingOn; pov = benchT < 15;
+    IN.boost = (benchT > 6 && benchT < 8) || (benchT > 17 && benchT < 19) ? 1 : 0; IN.yaw = 0; IN.lean = 0; IN.tuck = 0; B.wingOn = B.air > 0.5 ? 1 : B.air === 0 ? 0 : B.wingOn; pov = benchT < 15;
   }
 }
 
@@ -743,7 +744,7 @@ function frame(now) {
   else if (wasBones) { bones += wasBones; keep('duneBones', '' + bones); airText = '   ' + wasBones + (wasBones > 1 ? ' bones broken' : ' bone broken') + ', thrown ' + round(RD.dist) + ' m'; airShow = 3.5; wasBones = 0; }
   else if (B.air > 0) airMax = B.air;
   else if (airMax > 0) {
-    if (airMax > 0.5) { const nf = abs(B.flips), pp = round(prox), pts = round(airMax * 100) + 500 * nf + pp; score += pts; earn(airMax); airText = '   +' + pts + '   air +' + airMax.toFixed(1) + ' s' + (pp ? '   proximity ' + pp : '') + (nf ? '   ' + (nf > 1 ? nf + ' x ' : '') + (B.flips > 0 ? 'backflip' : 'front flip') : ''); airShow = 3; if (airMax > bestAir) { bestAir = airMax; keep('duneBestAir', bestAir.toFixed(2)); } }
+    if (airMax > 0.5) { const nf = abs(B.flips), pp = round(prox), lq = B.lq, pts = round((round(airMax * 100) + 500 * nf + pp) * (lq === 3 ? 1.5 : 1)); score += pts; earn(airMax + (lq === 3 ? 1 : 0)); if (lq === 3) big('PERFECT LANDING  x1.5  +1 s of air'); airText = '   +' + pts + '   air +' + airMax.toFixed(1) + ' s' + (lq === 3 ? '   perfect landing' : lq === 2 ? '   clean landing' : lq === 1 ? '   heavy landing' + (abs(B.lrel) > 0.16 ? (B.lrel > 0 ? ', nose high' : ', nose low') : '') : '') + (pp ? '   proximity ' + pp : '') + (nf ? '   ' + (nf > 1 ? nf + ' x ' : '') + (B.flips > 0 ? 'backflip' : 'front flip') : ''); airShow = 3; if (airMax > bestAir) { bestAir = airMax; keep('duneBestAir', bestAir.toFixed(2)); } }
     airMax = 0; B.flips = 0; prox = 0;
   }
   elFuel.style.transform = 'scaleX(' + B.fuel.toFixed(3) + ')';
@@ -756,7 +757,17 @@ function frame(now) {
     let lmTxt = '';
     { let bd = 1e9, bl = null; const todo = LM.some((l, i) => !((DAILY ? runFound : SAVE.found) & 1 << i)); LM.forEach((l, i) => { if (todo && (DAILY ? runFound : SAVE.found) & 1 << i) return; const d = hypot(l.wx - B.x, l.wz - B.z); if (d < bd) { bd = d; bl = l; } });
       if (bl) { let a = Math.atan2(bl.wx - B.x, bl.wz - B.z) - B.yaw; a -= round(a / TAU) * TAU; lmTxt = '\n' + (todo ? '? ' : '') + bl.name + ' ' + round(bd) + ' m ' + '\u2191\u2197\u2192\u2198\u2193\u2199\u2190\u2196'[(round(a / (PI / 4)) + 8) % 8]; } }
-    elScore.textContent = playing ? (DAILY ? 'DAILY ' + floor(runT / 60) + ':' + ('0' + floor(runT % 60)).slice(-2) + '    ' : '') + 'SCORE ' + score + '    AIR BANK ' + SAVE.bank.toFixed(0) + ' s    BEST AIR ' + bestAir.toFixed(1) + ' s' + (bones ? '    BONES ' + bones : '') + lmTxt + (bigT > 0 ? '\n' + bigText : '') + (airMax > 0.4 ? '\nAIR ' + airMax.toFixed(1) + ' s' + (abs(B.rot) > 5 ? '   FLIP ' + floor(abs(B.rot) / TAU + 0.2) : '') : '') + (B.wing > 0.3 && B.air > 0.5 ? '\nCLIMB ' + (B.vy >= 0 ? '+' : '') + B.vy.toFixed(1) + ' m/s' + (B.lift > 0.8 ? '   LIFT +' + B.lift.toFixed(1) : B.lift < -0.8 ? '   SINK ' + B.lift.toFixed(1) : '') : '') + (B.stl ? '\nSTALL: nose down' : '') + (B.fold > 0.3 ? '\nWING TIPS FOLDED: slow down' : '') + (B.ps > 0.5 ? '\nPOWER SLIDE' : '') + (prox >= 1 ? '\nPROXIMITY +' + round(prox) + (proxD >= 0 ? '   ' + proxD.toFixed(1) + ' m' : '') : '') : '';
+    // landing aid: coming down without wings, where the bike will touch and how its nose sits against that slope
+    let landTxt = '';
+    if (B.air > 0.6 && B.vy < -1 && B.wing < 0.2 && B.crash <= 0) {
+      const hg = B.y - heightAt(B.x, B.z);
+      if (hg < 30) {
+        const tt = min(2, hg / max(-B.vy, 1)), px = B.x + B.vx * tt, pz = B.z + B.vz * tt, hv = hypot(B.vx, B.vz) || 1, ux = B.vx / hv, uz = B.vz / hv;
+        const sl = Math.atan2(heightAt(px + ux * 2, pz + uz * 2) - heightAt(px - ux * 2, pz - uz * 2), 4), d = round((B.pitch - sl) * 57.3);
+        landTxt = '\nLANDING  slope ' + round(sl * 57.3) + ' deg   ' + (abs(d) <= 9 ? 'LINED UP' : d > 0 ? 'nose ' + d + ' deg high (I)' : 'nose ' + -d + ' deg low (K)');
+      }
+    }
+    elScore.textContent = playing ? (DAILY ? 'DAILY ' + floor(runT / 60) + ':' + ('0' + floor(runT % 60)).slice(-2) + '    ' : '') + 'SCORE ' + score + '    AIR BANK ' + SAVE.bank.toFixed(0) + ' s    BEST AIR ' + bestAir.toFixed(1) + ' s' + (bones ? '    BONES ' + bones : '') + lmTxt + (bigT > 0 ? '\n' + bigText : '') + (airMax > 0.4 ? '\nAIR ' + airMax.toFixed(1) + ' s' + (abs(B.rot) > 5 ? '   FLIP ' + floor(abs(B.rot) / TAU + 0.2) : '') : '') + (B.wing > 0.3 && B.air > 0.5 ? '\nCLIMB ' + (B.vy >= 0 ? '+' : '') + B.vy.toFixed(1) + ' m/s' + (B.lift > 0.8 ? '   LIFT +' + B.lift.toFixed(1) : B.lift < -0.8 ? '   SINK ' + B.lift.toFixed(1) : '') : '') + landTxt + (B.bury > 0.25 ? '\nBURIED: throttle to dig out' : B.soft > 0.5 && B.air === 0 ? '\nSOFT SAND' : '') + (B.hi > 0.15 && B.wing > 0.3 ? '\nROUGH AIR' + (B.hi > 0.6 ? ': too high, the wings will let go' : '') : '') + (B.stl ? '\nSTALL: nose down' : '') + (B.fold > 0.3 ? '\nWING TIPS FOLDED: slow down' : '') + (B.ps > 0.5 ? '\nPOWER SLIDE' : '') + (prox >= 1 ? '\nPROXIMITY +' + round(prox) + (proxD >= 0 ? '   ' + proxD.toFixed(1) + ' m' : '') : '') : '';
     elFuelBox.className = B.bst > 0.5 ? 'x' : B.armed ? '' : 'z';
     elHud.textContent = playing ? round(B.speed * 3.6) + ' km/h   ' + (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm + (B.crash > 0 ? '   crashed   ' + RD.bones + (RD.bones > 1 ? ' bones' : ' bone') : noteT > 0 ? note : airShow > 0 ? airText : '') : '';
   }
