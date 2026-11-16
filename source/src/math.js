@@ -16,8 +16,10 @@ const rseed = (n) => { _seed = (20261115 + Math.imul(n, 7919)) | 0; };
 // Detail level: 0 high, 1 medium, 2 low. The same world with less in it. Remembered between visits; if the last
 // load never finished (it crashed the tab), this one starts a level lower.
 const keep = (k, v) => { try { localStorage[k] = v; } catch {} };
-let LV = 0;
-try { LV = Math.min(2, Math.max(0, +localStorage.dune || 0)); if (localStorage.duneLoad && LV < 2) { LV++; keep('dune', LV); } } catch {}
+// a phone or tablet: touch controls go up, and the detail level starts on Low unless the player has picked one
+const TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+let LV = TOUCH ? 2 : 0;
+try { if (localStorage.dune != null) LV = Math.min(2, Math.max(0, +localStorage.dune || 0)); if (localStorage.duneLoad && LV < 2) { LV++; keep('dune', LV); } } catch {}
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const mix = (a, b, t) => a + (b - a) * t;
 const sstep = (a, b, x) => { x = clamp((x - a) / (b - a), 0, 1); return x * x * (3 - 2 * x); };

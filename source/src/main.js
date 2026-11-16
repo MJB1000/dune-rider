@@ -283,7 +283,28 @@ let pov = true, hour = d0.getHours() + d0.getMinutes() / 60, tRate = 0, skyHour 
 let dbgFov = 0; // set from the console (DUNE.fov) for a telephoto look at the bike
 const say = (t) => { note = '   ' + t; noteT = 2.5; };
 const pause = () => { playing = false; body.className = 'm'; elGo.textContent = 'Resume'; };
-elGo.onclick = () => { sound(); playing = true; body.className = 'g'; elGo.blur(); };
+elGo.onclick = () => {
+  sound(); playing = true; body.className = 'g'; elGo.blur();
+  // on a phone, fill the screen and hold it sideways where the browser allows
+  if (touchUI) { try { const p = document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); if (p) p.then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape')).catch(() => {}); } catch {} }
+};
+// ---- touch controls. The buttons press the same keys the keyboard does, so everything behind them is shared:
+// the left thumb has a stick (sideways steers, up and down shifts the rider's weight), the right has the rest.
+let touchUI = false, tSteer = 0, tLean = 0;
+const touchOn = () => { if (touchUI) return; touchUI = true; document.documentElement.classList.add('t'); };
+if (TOUCH) touchOn(); else addEventListener('touchstart', touchOn, { once: true, passive: true });
+for (const b of document.querySelectorAll('[data-k]')) {
+  const code = b.dataset.k, set = (d) => { if ((b.className === 'on') === d) return; b.className = d ? 'on' : ''; dispatchEvent(new KeyboardEvent(d ? 'keydown' : 'keyup', { code })); };
+  b.onpointerdown = (e) => { e.preventDefault(); try { b.setPointerCapture(e.pointerId); } catch {} set(true); };
+  b.onpointerup = b.onpointercancel = b.onlostpointercapture = () => set(false);
+}
+{
+  const pad = $('ts'), nub = $('tn'); let id = -1, ox = 0, oy = 0;
+  const move = (e) => { const r = pad.clientWidth * 0.3, dx = clamp((e.clientX - ox) / r, -1, 1), dy = clamp((e.clientY - oy) / r, -1, 1); tSteer = abs(dx) < 0.12 ? 0 : dx; tLean = abs(dy) < 0.45 ? 0 : -dy; nub.style.transform = 'translate(' + (dx * r).toFixed(0) + 'px,' + (dy * r).toFixed(0) + 'px)'; };
+  pad.onpointerdown = (e) => { e.preventDefault(); id = e.pointerId; try { pad.setPointerCapture(id); } catch {} const q = pad.getBoundingClientRect(); ox = q.left + q.width / 2; oy = q.top + q.height / 2; move(e); };
+  pad.onpointermove = (e) => { if (e.pointerId === id) move(e); };
+  pad.onpointerup = pad.onpointercancel = pad.onlostpointercapture = () => { id = -1; tSteer = tLean = 0; nub.style.transform = ''; };
+}
 addEventListener('keydown', (e) => {
   K[e.code] = 1;
   if (e.code === 'Escape' && playing) pause();
@@ -324,9 +345,10 @@ function readInput() {
     thr = max(thr, gp.buttons[7] ? gp.buttons[7].value : 0); brk = max(brk, gp.buttons[6] ? gp.buttons[6].value : 0);
     if (abs(gp.axes[0]) > 0.12) st = clamp(st + gp.axes[0], -1, 1);
   }
+  st = clamp(st + tSteer, -1, 1);
   IN.thr = thr; IN.brk = brk; IN.steer = st;
   // rider weight: I forward, K back; the right stick on a gamepad
-  IN.lean = clamp((K.KeyI ? 1 : 0) - (K.KeyK ? 1 : 0) + (gp && abs(gp.axes[3]) > 0.2 ? -gp.axes[3] : 0), -1, 1);
+  IN.lean = clamp((K.KeyI ? 1 : 0) - (K.KeyK ? 1 : 0) + (gp && abs(gp.axes[3]) > 0.2 ? -gp.axes[3] : 0) + tLean, -1, 1);
   // tail fin: Q swings the nose left, E right; the shoulder buttons on a gamepad
   IN.yaw = clamp((K.KeyE ? 1 : 0) - (K.KeyQ ? 1 : 0) + (gp ? (gp.buttons[5] && gp.buttons[5].pressed ? 1 : 0) - (gp.buttons[4] && gp.buttons[4].pressed ? 1 : 0) : 0), -1, 1);
   IN.boost = K.ShiftLeft || K.ShiftRight || (gp && gp.buttons[0] && gp.buttons[0].pressed) ? 1 : 0;

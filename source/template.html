@@ -3,7 +3,7 @@
 <head>
 <meta charset=utf-8>
 <title>Dune Rider</title>
-<meta name=viewport content="width=device-width,initial-scale=1">
+<meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name=theme-color content=#1b1108>
 <style>
 /* The class on <body> is the state of the page:
@@ -13,7 +13,7 @@ body {
   position: fixed; inset: 0; margin: 0; overflow: hidden;
   background: radial-gradient(#6b4a26, #1b1108 75%);
   font: 700 clamp(13px, .7vw + .9vh, 30px)/1.4 system-ui, sans-serif; color: #fff4e0;
-  -webkit-user-select: none; user-select: none;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; -webkit-tap-highlight-color: #0000;
 }
 canvas { position: absolute; width: 100%; height: 100%; transition: filter .8s, opacity 1.5s; }
 body:not(.g) canvas { filter: blur(.5vmax) brightness(.6); }
@@ -65,6 +65,30 @@ button:active { transform: translateY(.1em); filter: brightness(.9); }
 #n { display: block; height: 100%; border-radius: 1em; background: linear-gradient(90deg, #e0812a, #ffe2a8); transform-origin: 0; }
 .x #n { background: #fff; box-shadow: 0 0 .8em #ffb24a; }
 .z #n { background: #b0492a; }
+/* touch devices (class t on <html>): on-screen controls while riding, a shorter menu, and a prompt to turn the phone sideways */
+#tc, #th, #rot { display: none; }
+.t .g #tc { display: block; }
+.t #k { display: none; }
+.t #th { display: block; max-width: 30em; padding: .9em 1.2em; border-radius: .7em; background: #1b1108b3; font-size: .85em; font-weight: 600; line-height: 1.5; }
+.t h1 { font-size: min(4.4em, 13vmin); }
+.t #f { display: none; }
+#tc { position: absolute; inset: 0; font: 800 3.3vmin/1 system-ui, sans-serif; letter-spacing: .06em; pointer-events: none; }
+#tc b, #ts { position: absolute; display: grid; place-items: center; border-radius: 50%; background: #1b110859; box-shadow: 0 0 0 2px #ffd58a80; touch-action: none; pointer-events: auto; }
+#tc b.on { background: #ffd58ab3; color: #2a1704; }
+#ts { left: calc(4vmin + env(safe-area-inset-left)); bottom: 6vmin; width: 42vmin; height: 42vmin; }
+#tn { width: 17vmin; height: 17vmin; border-radius: 50%; background: #ffd58a99; box-shadow: 0 .3vmin 1.5vmin #0008; }
+#tg { right: calc(4vmin + env(safe-area-inset-right)); bottom: 6vmin; width: 26vmin; height: 26vmin; }
+#tb { right: calc(33vmin + env(safe-area-inset-right)); bottom: 4vmin; width: 21vmin; height: 21vmin; }
+#to { right: calc(5vmin + env(safe-area-inset-right)); bottom: 36vmin; width: 18vmin; height: 18vmin; }
+#tw { right: calc(27vmin + env(safe-area-inset-right)); bottom: 30vmin; width: 18vmin; height: 18vmin; }
+#tq { left: calc(5vmin + env(safe-area-inset-left)); bottom: 53vmin; width: 15vmin; height: 15vmin; }
+#te { left: calc(24vmin + env(safe-area-inset-left)); bottom: 53vmin; width: 15vmin; height: 15vmin; }
+#tv, #tr, #tp { top: 3vmin; width: 12vmin; height: 12vmin; font-size: .75em; }
+#tp { right: calc(4vmin + env(safe-area-inset-right)); } #tr { right: calc(18vmin + env(safe-area-inset-right)); } #tv { right: calc(32vmin + env(safe-area-inset-right)); }
+.t #i { left: 0; right: 0; bottom: .5em; text-align: center; font-size: 1.3em; }
+.t #o { left: 50%; margin-left: -6em; bottom: 2.6em; }
+.t #j { left: calc(1.2em + env(safe-area-inset-left)); font-size: .9em; }
+@media (orientation: portrait) { .t #rot { position: absolute; inset: 0; z-index: 9; display: grid; place-content: center; padding: 2em; background: #1b1108; font-size: 1.4em; text-align: center; } }
 #q { justify-self: center; padding: .5em 1em; font-size: .8em; background: #1b1108b3; color: #fff4e0; box-shadow: 0 0 0 2px #ffd58a55; }
 #i {
   position: absolute; left: 1.2em; bottom: 1em; margin: 0; font: 800 1.6em/1 system-ui, sans-serif; letter-spacing: .04em;
@@ -81,6 +105,7 @@ button:active { transform: translateY(.1em); filter: brightness(.9); }
     <div id=g>
       <button id=d>Ride</button>
       <button id=q>Detail</button>
+      <p id=th>Left thumb: steer. Push the stick up or down to shift your weight.<br>Right thumb: gas, brake, boost and wings. Tap wings to step through them, hold for a moment.<br>Gas and brake together in a turn slides the back out.</p>
       <div id=k>
         <p>
           <i><b>W</b></i>Throttle
@@ -107,6 +132,13 @@ button:active { transform: translateY(.1em); filter: brightness(.9); }
 </div>
 <p id=f>Built on the WebGPU groundwork of <a href=https://github.com/Noniv/abyssal-garden target=_blank>Abyssal Garden</a> by Maksymilian Dendura (MIT)</p>
 <div id=o><i id=n></i></div>
+<div id=tc>
+  <div id=ts><i id=tn></i></div>
+  <b id=tq data-k=KeyQ>◀ FIN</b><b id=te data-k=KeyE>FIN ▶</b>
+  <b id=tg data-k=KeyW>GAS</b><b id=tb data-k=KeyS>BRAKE</b><b id=to data-k=ShiftLeft>BOOST</b><b id=tw data-k=KeyF>WINGS</b>
+  <b id=tv data-k=KeyC>VIEW</b><b id=tr data-k=KeyR>RESET</b><b id=tp data-k=Escape>II</b>
+</div>
+<div id=rot>Turn your phone sideways to ride</div>
 <pre id=j></pre>
 <pre id=i></pre>
 <script>

@@ -429,6 +429,12 @@ All in physics.js; `source` sims unchanged in form.
 
 **Checked.** Stress: no NaNs, 0.1 crashes a minute, stuck events 14 (was 10; soft lee faces). Ramps: throttle 13 of 17, boost plus wings 17 of 17. Browser: power slide turned 49 degrees in 1.2 s with the HUD note, preload gave 0.41 s of air, the stall warning showed; no console errors. **Not checked:** the wing tips folding by eye, ground effect by feel, gamepad right stick, and whether soft sand is readable without a visual cue in the sand itself.
 
+## 7q. Touch version (2026-11-16, Matthew's request)
+
+Switches on by itself when the device's main pointer is coarse (`TOUCH` in math.js), or at the first touch on anything else; the class `t` on `<html>` drives the layout. The touch buttons dispatch the same key events the keyboard does, so wings tap and hold, power slide and the rest are shared code; the stick feeds `tSteer` and `tLean` into `readInput`. Menu shows a three-line touch guide in place of the key legend; portrait shows a turn-sideways prompt; detail defaults to Low on touch unless one has been chosen; Ride asks for fullscreen and a landscape lock where the browser allows. Keyboard play on desktop is untouched. Wing trim, time-of-day and mute have no touch buttons.
+
+**Checked** in the browser's phone emulation at 375 x 812 and 812 x 375: prompt, menu, gas, stick steer and weight, wings tap, no console errors. **Not checked:** any real phone, frame rate on phone hardware, iOS Safari, multi-touch with real fingers, notches.
+
 ## 8. Known trade-offs
 
 - **Repeat is more visible with megadunes:** each 2 km tile holds only three of them, so from the air the pattern can be spotted sooner. The fix is still a larger or blended tile.

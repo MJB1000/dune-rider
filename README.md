@@ -1,6 +1,6 @@
 # Dune Rider
 
-A dirt bike on an endless field of sand dunes, in the browser. Everything is made by code: no images, no 3D models, no sound files, no game engine. The whole game is one 99 KB `index.html`.
+A dirt bike on an endless field of sand dunes, in the browser. Everything is made by code: no images, no 3D models, no sound files, no game engine. The whole game is one 103 KB `index.html`.
 
 Built on the WebGPU groundwork of [Abyssal Garden](https://github.com/Noniv/abyssal-garden) by Maksymilian Dendura (MIT): the single-file build, the mesh helpers and the no-engine approach come from there. The underwater scene itself is still in this repository's git history (`main` branch).
 
@@ -15,6 +15,8 @@ python3 -m http.server 8765
 then open <http://localhost:8765>.
 
 ## Controls
+
+On a phone or tablet the game switches itself to touch: a stick under the left thumb (sideways steers, up and down shifts the rider's weight) and gas, brake, boost, wings and tail fin buttons under the right. It asks for the phone to be held sideways and starts on Low detail. It needs a phone whose browser has WebGPU (recent Chrome on Android, Safari on iOS 26).
 
 | | Keyboard | Gamepad |
 |---|---|---|
