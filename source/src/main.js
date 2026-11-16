@@ -270,6 +270,7 @@ function resize() {
 // start at the upwind end of the longest straight run of pan, facing down it: room to get up to speed before the dunes
 let spX = 300, spZ = 300, spBest = 0;
 for (let z = 0; z < TILE; z += 16) { let run = 0; for (let x = 0; x < TILE * 2; x += 8) { if (panAt(x, z) > 0.98) { run += 8; if (run > spBest) { spBest = run; spX = x - run + 30; spZ = z; } } else run = 0; } }
+for (let k = 0; k < 20 && kickH(spX, spZ) + kickH(spX + 12, spZ) > 0; k++) spX += 10; // not parked on a kicker
 resetBike(spX, spZ, PI / 2);
 // ---- landmarks: placed by rule so every world has all five. The mast stands on high ground, the rest on pans,
 // each well clear of the others and of the start. The world repeats, so each is drawn at its nearest copy.
@@ -285,7 +286,7 @@ const LM = buildLandmarks().map((l) => {
     let bx = 0, bz = 0;
     for (let t = 0; t < 6000; t++) {
       const x = rnd() * TILE, z = rnd() * TILE; bx = x; bz = z;
-      if ((l.site === 'high' ? heightAt(x, z) > hi * 0.82 : panAt(x, z) > 0.98 && panAt(x + 20, z) > 0.98 && panAt(x - 20, z) > 0.98) && hypot(wrapT(x - spX), wrapT(z - spZ)) > 140 && LM.every((o, j) => j >= i || hypot(wrapT(x - o.x), wrapT(z - o.z)) > 260)) break;
+      if ((l.site === 'high' ? heightAt(x, z) > hi * 0.82 : panAt(x, z) > 0.98 && panAt(x + 20, z) > 0.98 && panAt(x - 20, z) > 0.98 && kickH(x, z) + kickH(x + 30, z) + kickH(x - 30, z) + kickH(x, z + 30) + kickH(x, z - 30) === 0) && hypot(wrapT(x - spX), wrapT(z - spZ)) > 140 && LM.every((o, j) => j >= i || hypot(wrapT(x - o.x), wrapT(z - o.z)) > 260)) break;
     }
     l.x = bx; l.z = bz; l.y = heightAt(bx, bz); l.yaw = rnd() * TAU;
   });
@@ -306,7 +307,7 @@ const say = (t) => { note = '   ' + t; noteT = 2.5; };
 const SAVE = { bank: 0, total: 0, up: [0, 0, 0, 0, 0], found: 0, daily: 0, best: 0 };
 try { Object.assign(SAVE, JSON.parse(localStorage.duneSave || '{}')); } catch {}
 const saveNow = () => keep('duneSave', JSON.stringify(SAVE));
-const KIT = [[8, 'ROCKET BOOST', 'hold Shift'], [25, 'WINGS', 'tap F'], [60, 'TAIL FIN', 'Q and E in the air'], [150, 'SECOND WINGS', 'tap F twice']];
+const KIT = [[2, 'ROCKET BOOST', 'hold Shift'], [25, 'WINGS', 'tap F'], [60, 'TAIL FIN', 'Q and E in the air'], [150, 'SECOND WINGS', 'tap F twice']];
 const has = (i) => FREE || SAVE.total >= KIT[i][0];
 const UPG = [['Boost tank', 'longer burn'], ['Wing spars', 'tips fold later'], ['Suspension', 'harder landings'], ['Engine', 'more power'], ['Paddle tyres', 'loose sand']], COST = [20, 50, 120];
 const applyUp = () => { const u = SAVE.up; BK.burn = [3, 3.6, 4.2, 5][u[0]]; BK.gmax = [2.7, 3.1, 3.5, 4][u[1]]; BK.hard = [26, 29, 32, 36][u[2]]; BK.P = 27000 * (1 + 0.08 * u[3]); BK.Fmax = 1500 * (1 + 0.08 * u[3]); BK.softK = [1, 0.7, 0.4, 0.1][u[4]]; };

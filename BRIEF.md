@@ -452,3 +452,14 @@ Switches on by itself when the device's main pointer is coarse (`TOUCH` in math.
 - **Sun path:** passing straight overhead at noon is an equatorial sun. A tilted path would be more general but needs skyline maps in many directions (more load time and memory). Revisit in Phase 4 if noon looks too flat.
 - **Tile repeat:** the dune field repeats every 2 km. From a high crest the pattern can be spotted. Fix later by blending two differently sized tiles.
 - **Procedural bike:** see section 2.
+
+## 7s. Easier booster, kickers on the pans (2026-11-16)
+
+Asked for: the booster to unlock easily, and more ramp-like dunes of medium height through the open areas.
+
+- **Booster unlock** moved from 8 s of landed air to 2 s. The other thresholds (wings 25, tail fin 60, second wings 150) are unchanged.
+- **Kickers** (`kickH` in `terrain.js`): the field is cut into 128 m cells and seven in ten get a ramp dune where the whole of it fits on a pan. Run-up 63 to 81 m along the wind, lip 6 to 14 m up, 32-degree slip face behind, 13 to 21 m half width. Worked out once per cell, added to `duneH`, so physics and picture share it. They are hardpack like the pan. The start point steps off a kicker if it lands on one, and landmarks keep 30 m clear.
+- **Measured** (`node kickers.mjs`, throttle only, still air): 20 kickers in the default world, 20 of 20 landed, air 1.4 s least, 2.1 s median, 2.9 s most; 11 give 2 s or more, so one clean jump usually opens the booster.
+- **Rerun:** stress 0 NaN, 0.1 crashes/min, 13 stuck events; megadune ramps 13 / 6 / 17 of 17 as before.
+- **Checked in the browser:** a fresh save rode one kicker flat out, banked 2.5 s on the first jump and passed the booster threshold; no console errors.
+- **Not checked:** how they read from the air or at night, the Daily world's kicker count, a blind-critic look, frame time (one extra table lookup per height sample at load, nothing per frame).

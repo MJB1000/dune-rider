@@ -18,7 +18,7 @@ then open <http://localhost:8765>.
 
 You start with just the bike. Air time you land cleanly is the currency.
 
-- **The kit opens as your total grows:** rocket boost at 8 s, wings at 25 s, tail fin at 60 s, second wings at 150 s.
+- **The kit opens as your total grows:** rocket boost at 2 s (one good jump), wings at 25 s, tail fin at 60 s, second wings at 150 s.
 - **The bank is spent on upgrades** from the menu (click, or keys `1` to `5`): boost tank, wing spars, suspension, engine, paddle tyres. Three levels each, costing 20, 50 and 120 s.
 - **Five landmarks** are out there: a radio mast, a stone arch, a wrecked aeroplane, an oasis and the bones of something large. The readout points to the nearest one you have not found. Finding one pays 15 s of air; buzzing one in the air, or threading the arch, pays points. They are solid: hitting the mast, the arch or the wreck is a crash.
 - **Daily Dune:** a button on the menu grows a new world from today's date, the same for everyone, and starts a three-minute scored run. Your best for the day is kept in your browser. There is no shared leaderboard.
@@ -74,6 +74,7 @@ The booster is a bar: hold `Shift` to burn, let go to keep the rest. A full bar 
 - **Bike**: a rigid body on two sprung wheels stepped at 240 Hz, with grip limits, wheelspin, weight transfer and jumps. Full steering asks for the tightest turn the tyres can hold at that speed, the rider eases the throttle and shifts forward in a turn, and steers against a slide. A landing stays down: the dampers hold the bike on the ground, the sand takes a bite out of the speed, the engine labours for a moment, and the view drops and shakes with the hit. Tyre tracks and dust follow the wheels.
 - **Ramps**: four dunes in ten have a graded strip of packed sand that leads straight to the crest and ends in a lip.
 - **Pans**: about an eighth of the field is hard, dead-flat ground, the longest straight about 500 m, where the dunes shrink away to nothing. You start on one. Packed ground rolls easier than soft sand.
+- **Kickers**: about twenty medium ramp dunes stand alone on the pans, 6 to 14 m tall, each a graded run-up along the wind that ends in a lip. Flat out off one is about 2 s of air.
 - **Rocket boosters**: two pods on the tail. A 3-second tank shown as a bar, stronger the faster you are moving, that refills in 15 seconds on the ground and 45 in the air.
 - **Wings**: three metal sections a side flip out from the frame behind the steering head, with tail fins off the rear fender and an upright rudder that stands up when the bike leaves the ground. The brushed skins catch the sun: a soft sheen, and points of light that flash and move as the wing banks. Launch off a crest with speed and the bike glides at about 6.6 to 1.
 - **Sound**: a synthesized single-cylinder engine and wind.
@@ -88,7 +89,7 @@ npm install
 npm run build
 ```
 
-`npm run build:dev` writes an unminified `dev.html` instead. `npm test` runs the terrain and physics headless and prints speeds, air time and crashes. `node ramps.mjs` rides every megadune ramp. `node falcon.mjs` flies stoop-and-climb cycles. `node handling.mjs` measures cornering, braking, runway take-off and what a burn is worth with the wings in each position. `node sim.mjs` runs the longer stress simulations described in [`BRIEF.md`](BRIEF.md), which is the plan for what gets built next.
+`npm run build:dev` writes an unminified `dev.html` instead. `npm test` runs the terrain and physics headless and prints speeds, air time and crashes. `node ramps.mjs` rides every megadune ramp. `node kickers.mjs` rides every kicker on the pans. `node falcon.mjs` flies stoop-and-climb cycles. `node handling.mjs` measures cornering, braking, runway take-off and what a burn is worth with the wings in each position. `node sim.mjs` runs the longer stress simulations described in [`BRIEF.md`](BRIEF.md), which is the plan for what gets built next.
 
 | File | What's inside |
 |---|---|

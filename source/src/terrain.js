@@ -22,6 +22,28 @@ let TH, HZ0, HZ1; // heights (m), TN x TN; skyline slope toward sunrise / sunset
 
 const megaN = (u, v) => pfbm(u * 2 + 0.37, v * 2 + 0.11, 2, 2, 301 + WS); // where the megadunes are tall (high) or give out (low)
 const panAt = (x, z) => 1 - sstep(PAN0, PAN1, megaN(x / TILE, z / TILE)); // 1 on a pan, 0 among the dunes
+// Kickers: medium ramp dunes standing alone on the pans. The field is cut into 128 m cells; seven in ten get one where
+// the whole of it fits on a pan. Each is a graded run-up along the wind (+x) 63 to 81 m long that ends in a lip 6 to
+// 14 m up, with a slip face behind it. Worked out once per cell: crest x, crest z, run-up length, height, half width.
+const KC = 128, KNC = TILE / KC; let KK = null;
+const kickInit = () => {
+  KK = new Float32Array(KNC * KNC * 5);
+  for (let cj = 0; cj < KNC; cj++) for (let ci = 0; ci < KNC; ci++) {
+    if (ihash(ci, cj, 431 + WS) > 0.7) continue;
+    const o = (ci + cj * KNC) * 5, H = 6 + 8 * ihash(ci, cj, 433 + WS), L = 50 + 2.2 * H, hw = 13 + 8 * ihash(ci, cj, 439 + WS);
+    const cx = ci * KC + 84 + 20 * ihash(ci, cj, 443 + WS), cz = cj * KC + 64 + 56 * (ihash(ci, cj, 449 + WS) - 0.5);
+    KK[o] = cx; KK[o + 1] = cz; KK[o + 2] = L; KK[o + 4] = hw;
+    KK[o + 3] = H * sstep(0.6, 1, min(panAt(cx, cz), min(panAt(cx - L, cz), panAt(cx + H * 1.7, cz))));
+  }
+};
+const kickH = (x, z) => {
+  if (!KK) kickInit();
+  const xx = ((x % TILE) + TILE) % TILE, zz = ((z % TILE) + TILE) % TILE, o = (floor(xx / KC) + floor(zz / KC) * KNC) * 5, H = KK[o + 3];
+  if (H < 0.05) return 0;
+  const dx = xx - KK[o], hw = KK[o + 4], lat = 1 - sstep(hw * 0.45, hw, abs(zz - KK[o + 1]));
+  if (lat <= 0) return 0;
+  return H * lat * mix(pow(clamp(1 + dx / KK[o + 2], 0, 1), 1.7), pow(1 - clamp(dx / (H * 1.7), 0, 1), 1.15), sstep(-1, 1, dx));
+};
 // height of the dune field at (x, z) in metres; periodic over TILE. The wind blows along +x:
 // long gentle climbs on the windward side, a sharp crest, then a steep slip face.
 const duneH = (x, z) => {
@@ -59,7 +81,7 @@ const duneH = (x, z) => {
   const s1 = min(t / W, 1), lat1 = on1 * (1 - sstep(4, 12, d1)), clear1 = lat1 * sstep(0.1, 0.25, t) * (1 - sstep(W + 0.03, W + 0.06, t));
   const ramp1 = lat1 * A * (pow(s1, 1.25) - pow(s1, 1.6) + 0.07 * sstep(0.8, 1, s1) * (1 - sstep(W, W + 0.05, t)));
   _ramp = max(max(clearM, clear1 * calmF * (1 - pan)), pan);
-  return base + AM * profM + rampM + ((A * prof + ramp1) * (1 - 0.92 * clearM) + A2 * prof2 * (1 - 0.92 * max(clearM, clear1))) * calmF + 0.5 * pfbm(u * 64, v * 64, 64, 2, 83 + WS) * (1 - 0.8 * _ramp);
+  return base + kickH(x, z) + AM * profM + rampM + ((A * prof + ramp1) * (1 - 0.92 * clearM) + A2 * prof2 * (1 - 0.92 * max(clearM, clear1))) * calmF + 0.5 * pfbm(u * 64, v * 64, 64, 2, 83 + WS) * (1 - 0.8 * _ramp);
 };
 
 // ground height exactly as the terrain mesh draws it (each 1 m cell is two triangles split along its diagonal)
