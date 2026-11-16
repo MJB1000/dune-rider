@@ -10,6 +10,7 @@ const BK = {
   k: 11500, k2: 90000, c: 1350,    // spring, bottom-out spring, damper
   Fmax: 1500, P: 27000,            // peak drive force (N) and power (W)
   rocket: 2000, ram: 30, rocketMax: 4000, burn: 3, recharge: 15, // booster: thrust at rest (N), extra per m/s of airspeed, ceiling, seconds of burn in a full tank, seconds to refill it on the ground (three times as long in the air)
+  gmax: 2.7, hard: 26, softK: 1,   // what the upgrades change: g the wing tips take before folding, landing speed the bike survives (m/s), how much loose sand slows it
   reb: 2.4,                        // the dampers resist coming back out this much harder than going in, so a landing stays down
   wingS: 5.5,                      // wing area (m2) when the wings are out
   mu: 0.95, muLat: 0.85, cLat: 2100, crr: 0.055, drag: 0.36, brake: 1100,
@@ -39,7 +40,7 @@ function resetBike(x, z, yaw) {
 // about 600 m up. Only the wings feel any of this.
 const THN = 8, THC = TILE / THN, THERM = new Float32Array(THN * THN * 4), WIND = 13; // per square: x, z, radius, strength in m/s (0 = none)
 {
-  let s = 977; const r = () => { s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+  let s = 977 + WS; const r = () => { s = (Math.imul(s, 1103515245) + 12345) & 0x7fffffff; return s / 0x7fffffff; };
   for (let i = 0; i < THN * THN; i++) { const on = r() < 0.45; THERM[i * 4] = ((i % THN) + 0.2 + 0.6 * r()) * THC; THERM[i * 4 + 1] = (floor(i / THN) + 0.2 + 0.6 * r()) * THC; THERM[i * 4 + 2] = 70 + 50 * r(); THERM[i * 4 + 3] = on ? 5 + 4 * r() : 0; }
 }
 let STILL = 0; // the simulations set this for still air, so their numbers are about the bike and not the weather
@@ -125,7 +126,7 @@ function wheel(zw, R, st, drive, brk, fX, fY, fZ, uX, uY, uZ, rX, rZ) {
   // velocity of the axle: body velocity + pitch and yaw rotation
   const pvx = B.vx + B.q * (zw * uX + k.L * fX) + B.r * zw * rX, pvy = B.vy + B.q * (zw * uY + k.L * fY), pvz = B.vz + B.q * (zw * uZ + k.L * fZ) + B.r * zw * rZ;
   const vn = pvx * nx + pvy * ny + pvz * nz;
-  if (vn < -26 && B.air > 0.3) B.hard = 1; // came down flat from too high
+  if (vn < -k.hard && B.air > 0.3) B.hard = 1; // came down flat from too high
   if (B.air > 0.2 && -vn > B.imp) B.imp = -vn; // how hard this landing hit
   let Fs = k.k * comp + (comp > k.travel ? k.k2 * (comp - k.travel) : 0) - k.c * (vn > 0 ? k.reb : 1) * vn;
   if (Fs < 0) Fs = 0; else if (Fs > 30000) Fs = 30000;
@@ -140,7 +141,7 @@ function wheel(zw, R, st, drive, brk, fX, fY, fZ, uX, uY, uZ, rX, rZ) {
   const roll = clamp(vl * 2, -1, 1), pack = RMK[(round(ax * 0.5) & HM) + (round(az * 0.5) & HM) * HN];
   // the sand is not all the same: lee faces are loose avalanche sand that swallows the wheel and gives little to push
   // against, windward faces are a wind-packed crust that grips a little better, pans and ramps are hardpack
-  const lee = nx / max(ny, 0.3), soft = sstep(0.2, 0.5, lee) * (1 - pack), grip = (1 - 0.18 * soft) * (lee < -0.05 ? 1.08 : 1);
+  const lee = nx / max(ny, 0.3), soft = sstep(0.2, 0.5, lee) * (1 - pack) * k.softK, grip = (1 - 0.18 * soft) * (lee < -0.05 ? 1.08 : 1);
   if (soft > _soft) _soft = soft;
   let Fl = drive - (brk + k.crr * (1 - 0.6 * pack) * (1 + 1.8 * soft) * (1 + 3 * B.bog) * Fs) * roll; // (a wheel that has just landed is dug in)
   const lim = k.mu * Fs * grip;
@@ -282,7 +283,7 @@ function stepBike(dt) {
     // wing loading: ask the wings for more than about 2.7 g for half a second and the tip sections fold back.
     // They stay folded, with four tenths of the wing gone, until the bike has been slow and gentle for a second.
     const nRaw = qd * S * cl / (k.m * 9.81);
-    B.ovl = nRaw > 2.7 ? B.ovl + dt : max(0, B.ovl - dt * 2); if (B.ovl > 0.5) B.folded = 1;
+    B.ovl = nRaw > k.gmax ? B.ovl + dt : max(0, B.ovl - dt * 2); if (B.ovl > 0.5) B.folded = 1;
     if (B.folded && as < 33 && nRaw < 2) { B.ft += dt; if (B.ft > 1) { B.folded = 0; B.ft = 0; B.ovl = 0; } } else B.ft = 0;
     // the wings give rather than pull more than about three g, so a fast pull-out is a long clean arc, not a wall of drag
     const clG = 3.2 * k.m * 9.81 / (qd * S); if (cl > clG) { cl = clG; cd = cd0 + cl * cl * ki; }

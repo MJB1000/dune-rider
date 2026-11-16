@@ -20,7 +20,7 @@ let _ramp = 0; // set by duneH: how much of a ramp the last point was on
 let AOQ; // how open to the sky each spot is (1 = open plain, lower in troughs), 512 x 512 at 4 m
 let TH, HZ0, HZ1; // heights (m), TN x TN; skyline slope toward sunrise / sunset, HN x HN (2 m spacing)
 
-const megaN = (u, v) => pfbm(u * 2 + 0.37, v * 2 + 0.11, 2, 2, 301); // where the megadunes are tall (high) or give out (low)
+const megaN = (u, v) => pfbm(u * 2 + 0.37, v * 2 + 0.11, 2, 2, 301 + WS); // where the megadunes are tall (high) or give out (low)
 const panAt = (x, z) => 1 - sstep(PAN0, PAN1, megaN(x / TILE, z / TILE)); // 1 on a pan, 0 among the dunes
 // height of the dune field at (x, z) in metres; periodic over TILE. The wind blows along +x:
 // long gentle climbs on the windward side, a sharp crest, then a steep slip face.
@@ -30,21 +30,21 @@ const duneH = (x, z) => {
   // across to build speed on. Around the edge the dunes do not stop at a wall: they shrink, keeping their shape,
   // the ordinary dunes over a short distance (pan) and the megadunes over a longer one (mg).
   const NM = megaN(u, v), pan = 1 - sstep(PAN0, PAN1, NM), mg = sstep(PAN0, PAN2, NM);
-  const base = mix(16 * pfbm(u * 3, v * 3, 3, 3, 11), 3, pan);
-  const amp = 5 + 24 * sstep(0.3, 0.75, pfbm(u * 5, v * 5, 5, 2, 23));
-  const ph = u * 13 + v * 2 + 1.1 * pfbm(u * 6, v * 6, 6, 3, 37);
+  const base = mix(16 * pfbm(u * 3, v * 3, 3, 3, 11 + WS), 3, pan);
+  const amp = 5 + 24 * sstep(0.3, 0.75, pfbm(u * 5, v * 5, 5, 2, 23 + WS));
+  const ph = u * 13 + v * 2 + 1.1 * pfbm(u * 6, v * 6, 6, 3, 37 + WS);
   // the slip face always rests near 32 degrees, so a taller dune has a longer one
   const A = amp * (0.65 + 0.7 * pnoise(u * 28, v * 28, 28, 51)) * (1 - pan);
   const t = ph - floor(ph), W = 1 - clamp(A * 1.6 / 157.5, 0.04, 0.42);
   const prof = t < W ? pow(t / W, 1.6) : pow(1 - (t - W) / (1 - W), 1.15);
-  const ph2 = u * 41 - v * 7 + 0.8 * pfbm(u * 12, v * 12, 12, 2, 67);
+  const ph2 = u * 41 - v * 7 + 0.8 * pfbm(u * 12, v * 12, 12, 2, 67 + WS);
   const t2 = ph2 - floor(ph2);
   const A2 = 2.2 * (0.4 + pnoise(u * 9, v * 9, 9, 71)) * (1 - pan), W2 = 1 - clamp(A2 * 1.7 / 50, 0.04, 0.4);
   const prof2 = t2 < W2 ? pow(t2 / W2, 1.5) : pow(1 - (t2 - W2) / (1 - W2), 1.15);
   // megadunes: three great ridges across the field, the tallest about five times the height of the ordinary dunes,
   // which ride on their backs. Same shape rules: a long windward climb, a slip face near the angle of repose.
   const AM = (40 + 222 * sstep(0.3, 0.72, NM)) * (0.8 + 0.35 * pnoise(u * 7, v * 7, 7, 311)) * mg;
-  const pm = u * 3 + v + 0.9 * pfbm(u * 3, v * 3, 3, 3, 317), tm = pm - floor(pm), WM = 1 - clamp(AM * 1.6 / 683, 0.05, 0.5);
+  const pm = u * 3 + v + 0.9 * pfbm(u * 3, v * 3, 3, 3, 317 + WS), tm = pm - floor(pm), WM = 1 - clamp(AM * 1.6 / 683, 0.05, 0.5);
   // the crest is rounded over a few metres so it holds its line at a distance
   const profM = mix(pow(min(tm / WM, 1), 1.5), pow(1 - clamp((tm - WM) / (1 - WM), 0, 1), 1.15), sstep(WM - 0.012, WM + 0.012, tm));
   // a megadune's slip face is one smooth avalanche slope: the ordinary dunes do not survive on it
@@ -52,14 +52,14 @@ const duneH = (x, z) => {
   // Ramps. Four dunes in ten have one: a strip where the small dunes are swept away and the climb is graded into a
   // steady run-up that leads straight to the crest and ends in a lip to launch from. The field is cut into stretches
   // along each crest (256 m for megadunes, 85 m for ordinary dunes); a hash of dune and stretch picks which get one.
-  const cM = floor(v * 8), dM = abs(v * 8 - cM - 0.5) * 256, onM = ihash(((floor(pm) % 3) + 3) % 3, cM, 401) < 0.4 ? sstep(0.15, 0.45, mg) : 0;
+  const cM = floor(v * 8), dM = abs(v * 8 - cM - 0.5) * 256, onM = ihash(((floor(pm) % 3) + 3) % 3, cM, 401 + WS) < 0.4 ? sstep(0.15, 0.45, mg) : 0;
   const sM = min(tm / WM, 1), latM = onM * (1 - sstep(12, 40, dM)), clearM = onM * (1 - sstep(16, 44, dM)) * sstep(0.08, 0.2, tm) * (1 - sstep(WM + 0.02, WM + 0.04, tm));
   const rampM = latM * AM * (pow(sM, 1.3) - pow(sM, 1.5) + 0.03 * sstep(0.84, 1, sM) * (1 - sstep(WM, WM + 0.022, tm)));
-  const c1 = floor(v * 24), d1 = abs(v * 24 - c1 - 0.5) * 85.3, on1 = ihash(((floor(ph) % 13) + 13) % 13, c1, 409) < 0.4 ? 1 : 0;
+  const c1 = floor(v * 24), d1 = abs(v * 24 - c1 - 0.5) * 85.3, on1 = ihash(((floor(ph) % 13) + 13) % 13, c1, 409 + WS) < 0.4 ? 1 : 0;
   const s1 = min(t / W, 1), lat1 = on1 * (1 - sstep(4, 12, d1)), clear1 = lat1 * sstep(0.1, 0.25, t) * (1 - sstep(W + 0.03, W + 0.06, t));
   const ramp1 = lat1 * A * (pow(s1, 1.25) - pow(s1, 1.6) + 0.07 * sstep(0.8, 1, s1) * (1 - sstep(W, W + 0.05, t)));
   _ramp = max(max(clearM, clear1 * calmF * (1 - pan)), pan);
-  return base + AM * profM + rampM + ((A * prof + ramp1) * (1 - 0.92 * clearM) + A2 * prof2 * (1 - 0.92 * max(clearM, clear1))) * calmF + 0.5 * pfbm(u * 64, v * 64, 64, 2, 83) * (1 - 0.8 * _ramp);
+  return base + AM * profM + rampM + ((A * prof + ramp1) * (1 - 0.92 * clearM) + A2 * prof2 * (1 - 0.92 * max(clearM, clear1))) * calmF + 0.5 * pfbm(u * 64, v * 64, 64, 2, 83 + WS) * (1 - 0.8 * _ramp);
 };
 
 // ground height exactly as the terrain mesh draws it (each 1 m cell is two triangles split along its diagonal)

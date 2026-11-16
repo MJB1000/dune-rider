@@ -271,6 +271,25 @@ function resize() {
 let spX = 300, spZ = 300, spBest = 0;
 for (let z = 0; z < TILE; z += 16) { let run = 0; for (let x = 0; x < TILE * 2; x += 8) { if (panAt(x, z) > 0.98) { run += 8; if (run > spBest) { spBest = run; spX = x - run + 30; spZ = z; } } else run = 0; } }
 resetBike(spX, spZ, PI / 2);
+// ---- landmarks: placed by rule so every world has all five. The mast stands on high ground, the rest on pans,
+// each well clear of the others and of the start. The world repeats, so each is drawn at its nearest copy.
+const wrapT = (d) => d - round(d / TILE) * TILE;
+const LM = buildLandmarks().map((l) => {
+  const ub = device.createBuffer({ size: 64, usage: BU.UNIFORM | BU.COPY_DST });
+  return { ...l, x: 0, y: 0, z: 0, yaw: 0, wx: 0, wz: 0, buzz: 0, vb: mkBuf(l.mesh.vb, BU.VERTEX), ib: mkBuf(l.mesh.ib, BU.INDEX), n: l.mesh.ib.length, ub, mat: new Float32Array(16), bg: device.createBindGroup({ layout: BGL_P, entries: [{ binding: 0, resource: { buffer: ub } }] }) };
+});
+{
+  let hi = 0; for (let z = 0; z < TILE; z += 32) for (let x = 0; x < TILE; x += 32) hi = max(hi, heightAt(x, z));
+  rseed(77);
+  LM.forEach((l, i) => {
+    let bx = 0, bz = 0;
+    for (let t = 0; t < 6000; t++) {
+      const x = rnd() * TILE, z = rnd() * TILE; bx = x; bz = z;
+      if ((l.site === 'high' ? heightAt(x, z) > hi * 0.82 : panAt(x, z) > 0.98 && panAt(x + 20, z) > 0.98 && panAt(x - 20, z) > 0.98) && hypot(wrapT(x - spX), wrapT(z - spZ)) > 140 && LM.every((o, j) => j >= i || hypot(wrapT(x - o.x), wrapT(z - o.z)) > 260)) break;
+    }
+    l.x = bx; l.z = bz; l.y = heightAt(bx, bz); l.yaw = rnd() * TAU;
+  });
+}
 const CAM = { x: B.x - 7, y: B.y + 2.5, z: B.z, yaw: PI / 2 + 0.6 };
 let playing = false, tLast = performance.now(), tNow = 0, acc = 0, hudT = 0, airMax = 0, airShow = 0, airText = '', bikeSh = 1, score = 0, bestAir = 0, benching = false, benchT = 0, benchDone = null, fT = -1, fW = 0, fF = 0, fTemp = 0, camDrop = 0, camDropV = 0, shk = 0, finUp = 0, prox = 0, proxD = -1, bones = 0, wasBones = 0, devAcc = 0, cdAcc = 0;
 try { bones = +localStorage.duneBones || 0; } catch {}
@@ -282,9 +301,40 @@ const d0 = new Date(), RATES = [60, 600, 0, 1], RATE_NAMES = ['1 hour a minute',
 let pov = true, hour = d0.getHours() + d0.getMinutes() / 60, tRate = 0, skyHour = -99, skyDirty = true, expo = -1, camPitch = 0, camRoll = 0, noteT = 0, note = '';
 let dbgFov = 0; // set from the console (DUNE.fov) for a telephoto look at the bike
 const say = (t) => { note = '   ' + t; noteT = 2.5; };
-const pause = () => { playing = false; body.className = 'm'; elGo.textContent = 'Resume'; };
+// ---- progression. Air time landed cleanly is the currency. The running total opens the kit, in order; the bank is
+// spent on upgrades. Finding a landmark pays a bonus into both. Kept in the browser between visits.
+const SAVE = { bank: 0, total: 0, up: [0, 0, 0, 0, 0], found: 0, daily: 0, best: 0 };
+try { Object.assign(SAVE, JSON.parse(localStorage.duneSave || '{}')); } catch {}
+const saveNow = () => keep('duneSave', JSON.stringify(SAVE));
+const KIT = [[8, 'ROCKET BOOST', 'hold Shift'], [25, 'WINGS', 'tap F'], [60, 'TAIL FIN', 'Q and E in the air'], [150, 'SECOND WINGS', 'tap F twice']];
+const has = (i) => FREE || SAVE.total >= KIT[i][0];
+const UPG = [['Boost tank', 'longer burn'], ['Wing spars', 'tips fold later'], ['Suspension', 'harder landings'], ['Engine', 'more power'], ['Paddle tyres', 'loose sand']], COST = [20, 50, 120];
+const applyUp = () => { const u = SAVE.up; BK.burn = [3, 3.6, 4.2, 5][u[0]]; BK.gmax = [2.7, 3.1, 3.5, 4][u[1]]; BK.hard = [26, 29, 32, 36][u[2]]; BK.P = 27000 * (1 + 0.08 * u[3]); BK.Fmax = 1500 * (1 + 0.08 * u[3]); BK.softK = [1, 0.7, 0.4, 0.1][u[4]]; };
+applyUp();
+let bigT = 0, bigText = '';
+const big = (t) => { bigText = t; bigT = 5; };
+const earn = (sec) => { const was = SAVE.total; SAVE.bank += sec; SAVE.total += sec; for (const k of KIT) if (was < k[0] && SAVE.total >= k[0] && !FREE) big('UNLOCKED: ' + k[1] + '  (' + k[2] + ')'); saveNow(); };
+const buy = (i) => { const lv = SAVE.up[i]; if (lv > 2 || SAVE.bank < COST[lv]) return; SAVE.bank -= COST[lv]; SAVE.up[i] = lv + 1; applyUp(); saveNow(); shop(); };
+// ---- Daily Dune: a three-minute scored run over today's dunes
+const RUN = 180; let runT = DAILY ? RUN : 0, runDone = false, runFound = 0;
+const elShop = $('u'), elDaily = $('dy');
+function shop() {
+  const nx = KIT.find((k, i) => !has(i));
+  let h = (DAILY ? '<p><b>DAILY DUNE</b> &nbsp; three minutes on today&rsquo;s dunes, the same for everyone' + (SAVE.daily === DAY ? ' &nbsp; best today ' + SAVE.best : '') + (runDone ? '<br><b>Run over: ' + score + ' points</b>' : '') + '</p>' : '')
+    + '<p><b>AIR BANK ' + SAVE.bank.toFixed(1) + ' s</b> &nbsp; ' + (FREE ? 'free play: everything open' : nx ? 'next: ' + nx[1] + ' at ' + nx[0] + ' s landed (' + SAVE.total.toFixed(0) + ' so far)' : 'whole kit unlocked') + '</p><p>';
+  UPG.forEach((u, i) => { const lv = SAVE.up[i]; h += '<button data-u=' + i + (lv > 2 || SAVE.bank < COST[lv] ? ' disabled' : '') + '><i>' + (i + 1) + '</i> ' + u[0] + ' ' + '\u25ae'.repeat(lv) + '\u25af'.repeat(3 - lv) + (lv > 2 ? '' : ' &nbsp;' + COST[lv] + ' s') + '</button>'; });
+  elShop.innerHTML = h + '</p>';
+  for (const b of elShop.querySelectorAll('[data-u]')) b.onclick = () => buy(+b.dataset.u);
+  // touch buttons for kit not yet earned stay off the screen
+  $('to').style.display = has(0) ? '' : 'none'; $('tw').style.display = has(1) ? '' : 'none'; $('tq').style.display = $('te').style.display = has(2) ? '' : 'none';
+}
+elDaily.textContent = DAILY ? 'Home dunes' : 'Daily Dune';
+elDaily.onclick = () => { location.href = location.pathname + (DAILY ? '' : '?daily'); };
+shop();
+const pause = () => { playing = false; body.className = 'm'; elGo.textContent = runDone ? 'Run again' : 'Resume'; shop(); };
 elGo.onclick = () => {
   sound(); playing = true; body.className = 'g'; elGo.blur();
+  if (runDone) { runDone = false; runT = RUN; score = 0; runFound = 0; prox = 0; resetBike(spX, spZ, PI / 2); }
   // on a phone, fill the screen and hold it sideways where the browser allows
   if (touchUI) { try { const p = document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); if (p) p.then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape')).catch(() => {}); } catch {} }
 };
@@ -309,10 +359,12 @@ addEventListener('keydown', (e) => {
   K[e.code] = 1;
   if (e.code === 'Escape' && playing) pause();
   else if (e.code === 'Enter' && !playing && body.className === 'm') elGo.onclick();
+  else if (!playing && body.className === 'm' && /^Digit[1-5]$/.test(e.code)) buy(+e.code[5] - 1);
   else if (e.code === 'KeyR' && playing) resetBike(B.x, B.z, B.yaw);
   else if (e.code === 'KeyF' && playing && !e.repeat && B.crash <= 0) {
     // a tap steps through: no wings, main wings, main and lower wings, no wings. Held, it is a momentary switch:
     // wings out for as long as it is down if they were away, away for as long as it is down if they were out.
+    if (!has(1)) { say('wings: land ' + Math.ceil(KIT[1][0] - SAVE.total) + ' s more air to unlock'); return; }
     fT = performance.now(); fW = B.wingOn; fF = B.flapOn; fTemp = 0;
     if (!fW) { B.wingOn = 1; B.flapOn = 0; soundWings(1); say('wings out'); }
   }
@@ -331,7 +383,7 @@ addEventListener('keyup', (e) => {
     if (!playing || B.crash > 0) return;
     if (!fW) { if (held > 300) { B.wingOn = 0; B.flapOn = 0; soundWings(0); say('wings away'); } }            // was away: a hold puts them back, a tap leaves the main wings out
     else if (fTemp) { B.wingOn = 1; B.flapOn = fF; soundWings(1); say(fF ? 'second wings out' : 'wings out'); } // was out and held: back as they were
-    else if (!fF) { B.flapOn = 1; soundWings(1); say('second wings out'); }                                     // tap with the main wings out: add the lower pair
+    else if (!fF && has(3)) { B.flapOn = 1; soundWings(1); say('second wings out'); }                                     // tap with the main wings out: add the lower pair
     else { B.wingOn = 0; B.flapOn = 0; soundWings(0); say('wings away'); }                                      // tap with both out: all away
   }
 });
@@ -351,7 +403,8 @@ function readInput() {
   IN.lean = clamp((K.KeyI ? 1 : 0) - (K.KeyK ? 1 : 0) + (gp && abs(gp.axes[3]) > 0.2 ? -gp.axes[3] : 0) + tLean, -1, 1);
   // tail fin: Q swings the nose left, E right; the shoulder buttons on a gamepad
   IN.yaw = clamp((K.KeyE ? 1 : 0) - (K.KeyQ ? 1 : 0) + (gp ? (gp.buttons[5] && gp.buttons[5].pressed ? 1 : 0) - (gp.buttons[4] && gp.buttons[4].pressed ? 1 : 0) : 0), -1, 1);
-  IN.boost = K.ShiftLeft || K.ShiftRight || (gp && gp.buttons[0] && gp.buttons[0].pressed) ? 1 : 0;
+  IN.boost = has(0) && (K.ShiftLeft || K.ShiftRight || (gp && gp.buttons[0] && gp.buttons[0].pressed)) ? 1 : 0;
+  if (!has(2)) IN.yaw = 0;
   if (benching) {
     // the scripted ride: flat out, weaving, a boost and a glide, half in each view
     const w = sin(benchT * 0.9); IN.thr = B.wingOn ? 0 : 1; IN.brk = 0; IN.steer = w > 0.6 ? 1 : w < -0.6 ? -1 : 0;
@@ -498,7 +551,25 @@ function frame(now) {
   mRot(MT, FAX[0], FAX[1], FAX[2], B.steer, HEAD[0], HEAD[1], HEAD[2], 0, SLIDE[1] * B.cF, SLIDE[2] * B.cF); mMul(pForkL.mat, MB, MT);
   mRot(MT2, 1, 0, 0, B.spinF, 0, 0, 0, AXF[0], AXF[1], AXF[2]); mMul(MT3, MT, MT2); mMul(pWheelF.mat, MB, MT3);
   mRot(MT2, 1, 0, 0, B.spinR, 0, 0, 0, 0, -BK.L + B.cR, -BK.b); mMul(pWheelR.mat, MB, MT2);
+  // kit not yet earned is not on the bike
+  if (!has(1)) for (const W of WINGS) for (const p of W) p.mat.fill(0);
+  if (!has(2)) pRudder.mat.fill(0);
+  if (!has(3)) for (let k = 26; k < 30; k++) PARTS[k].mat.fill(0);
   for (const p of PARTS) device.queue.writeBuffer(p.ub, 0, p.mat);
+  // ---- landmarks: draw the nearest copy; find them, buzz them, do not hit them
+  for (let i = 0; i < LM.length; i++) {
+    const l = LM[i]; l.wx = l.x + round((B.x - l.x) / TILE) * TILE; l.wz = l.z + round((B.z - l.z) / TILE) * TILE;
+    mRot(l.mat, 0, 1, 0, l.yaw, 0, 0, 0, l.wx, l.y, l.wz); device.queue.writeBuffer(l.ub, 0, l.mat);
+    if (!playing || B.crash > 0) continue;
+    const dx = B.x - l.wx, dz = B.z - l.wz, dy = B.y - l.y, c = cos(l.yaw), s = sin(l.yaw), lx = dx * c - dz * s, lz = dx * s + dz * c, d = hypot(dx, dy - l.cy, dz);
+    const bit = 1 << i, seen = DAILY ? runFound & bit : SAVE.found & bit;
+    if (!seen && hypot(dx, dz) < 70) { if (DAILY) { runFound |= bit; score += 1000; big('FOUND ' + l.name + '  +1000'); } else { SAVE.found |= bit; earn(15); big('FOUND ' + l.name + '  +15 s of air'); } }
+    if (B.air === 0) l.buzz = 0;
+    else if (!l.buzz && B.air > 0.5 && d < l.R) { l.buzz = 1; const pts = l.ring ? 500 : 300; prox += pts; big((l.ring ? 'THREADED ' : 'BUZZED ') + l.name + '  +' + pts); }
+    let hit = l.ring && dy > -1 && hypot(hypot(lx, dy + 1) - 20, lz) < 2.6;
+    for (const q of l.cols) if (hypot(lx - q[0], lz - q[1]) < q[2] && dy > q[3] && dy < q[4]) hit = true;
+    if (hit && B.speed > 4) B.hard = 1;
+  }
 
   // ---- tracks
   track(0, B.x - fX * BK.b - uX * 0.6, B.z - fZ * BK.b - uZ * 0.6, B.gR > 0 && B.crash <= 0, 0.14, 1);
@@ -633,6 +704,7 @@ function frame(now) {
   rp = enc.beginRenderPass({ colorAttachments: [], depthStencilAttachment: { view: viewSM, depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' } });
   rp.setPipeline(pShadow); rp.setBindGroup(0, bgS);
   for (const p of PARTS) { if (p.fx) continue; rp.setBindGroup(1, p.bg); rp.setVertexBuffer(0, p.vb); rp.setIndexBuffer(p.ib, 'uint32'); rp.drawIndexed(p.n); }
+  for (const p of LM) { rp.setBindGroup(1, p.bg); rp.setVertexBuffer(0, p.vb); rp.setIndexBuffer(p.ib, 'uint32'); rp.drawIndexed(p.n); }
   rp.end();
   rp = enc.beginRenderPass(passScene);
   rp.setBindGroup(0, bgM);
@@ -645,6 +717,7 @@ function frame(now) {
   rp.setPipeline(pGrass); rp.setVertexBuffer(0, bladeVB); rp.draw(18, bladeN);
   rp.setPipeline(pBike);
   for (const p of PARTS) { if ((fp && p.hide) || (p.fx && B.bst < 0.03)) continue; rp.setBindGroup(1, p.bg); rp.setVertexBuffer(0, p.vb); rp.setIndexBuffer(p.ib, 'uint32'); rp.drawIndexed(p.n); }
+  for (const p of LM) { rp.setBindGroup(1, p.bg); rp.setVertexBuffer(0, p.vb); rp.setIndexBuffer(p.ib, 'uint32'); rp.drawIndexed(p.n); }
   rp.setPipeline(pSky); rp.draw(3);
   if (dCount) { rp.setPipeline(pDust); rp.setVertexBuffer(0, dustVB); rp.draw(6, dCount); }
   rp.setPipeline(pMote); rp.setVertexBuffer(0, moteVB); rp.draw(6, MOTES);
@@ -669,14 +742,20 @@ function frame(now) {
   else if (wasBones) { bones += wasBones; keep('duneBones', '' + bones); airText = '   ' + wasBones + (wasBones > 1 ? ' bones broken' : ' bone broken') + ', thrown ' + round(RD.dist) + ' m'; airShow = 3.5; wasBones = 0; }
   else if (B.air > 0) airMax = B.air;
   else if (airMax > 0) {
-    if (airMax > 0.5) { const nf = abs(B.flips), pp = round(prox), pts = round(airMax * 100) + 500 * nf + pp; score += pts; airText = '   +' + pts + (pp ? '   proximity ' + pp : '') + (nf ? '   ' + (nf > 1 ? nf + ' x ' : '') + (B.flips > 0 ? 'backflip' : 'front flip') : ''); airShow = 3; if (airMax > bestAir) { bestAir = airMax; keep('duneBestAir', bestAir.toFixed(2)); } }
+    if (airMax > 0.5) { const nf = abs(B.flips), pp = round(prox), pts = round(airMax * 100) + 500 * nf + pp; score += pts; earn(airMax); airText = '   +' + pts + '   air +' + airMax.toFixed(1) + ' s' + (pp ? '   proximity ' + pp : '') + (nf ? '   ' + (nf > 1 ? nf + ' x ' : '') + (B.flips > 0 ? 'backflip' : 'front flip') : ''); airShow = 3; if (airMax > bestAir) { bestAir = airMax; keep('duneBestAir', bestAir.toFixed(2)); } }
     airMax = 0; B.flips = 0; prox = 0;
   }
   elFuel.style.transform = 'scaleX(' + B.fuel.toFixed(3) + ')';
-  airShow -= dt; hudT -= dt; noteT -= dt;
+  // the daily run's clock; when it runs out the score stands and the best for the day is kept
+  if (DAILY && playing && !runDone) { runT -= dt; if (runT <= 0) { runT = 0; runDone = true; if (SAVE.daily !== DAY || score > SAVE.best) { SAVE.daily = DAY; SAVE.best = score; } saveNow(); pause(); } }
+  airShow -= dt; hudT -= dt; noteT -= dt; bigT -= dt;
   if (hudT <= 0) {
     hudT = 0.1; const hh = floor(hour), mm = floor((hour - hh) * 60);
-    elScore.textContent = playing ? 'SCORE ' + score + '    BEST AIR ' + bestAir.toFixed(1) + ' s' + (bones ? '    BONES ' + bones : '') + (airMax > 0.4 ? '\nAIR ' + airMax.toFixed(1) + ' s' + (abs(B.rot) > 5 ? '   FLIP ' + floor(abs(B.rot) / TAU + 0.2) : '') : '') + (B.wing > 0.3 && B.air > 0.5 ? '\nCLIMB ' + (B.vy >= 0 ? '+' : '') + B.vy.toFixed(1) + ' m/s' + (B.lift > 0.8 ? '   LIFT +' + B.lift.toFixed(1) : B.lift < -0.8 ? '   SINK ' + B.lift.toFixed(1) : '') : '') + (B.stl ? '\nSTALL: nose down' : '') + (B.fold > 0.3 ? '\nWING TIPS FOLDED: slow down' : '') + (B.ps > 0.5 ? '\nPOWER SLIDE' : '') + (prox >= 1 ? '\nPROXIMITY +' + round(prox) + (proxD >= 0 ? '   ' + proxD.toFixed(1) + ' m' : '') : '') : '';
+    // which way to the nearest landmark not yet found (or the nearest of all once they are)
+    let lmTxt = '';
+    { let bd = 1e9, bl = null; const todo = LM.some((l, i) => !((DAILY ? runFound : SAVE.found) & 1 << i)); LM.forEach((l, i) => { if (todo && (DAILY ? runFound : SAVE.found) & 1 << i) return; const d = hypot(l.wx - B.x, l.wz - B.z); if (d < bd) { bd = d; bl = l; } });
+      if (bl) { let a = Math.atan2(bl.wx - B.x, bl.wz - B.z) - B.yaw; a -= round(a / TAU) * TAU; lmTxt = '\n' + (todo ? '? ' : '') + bl.name + ' ' + round(bd) + ' m ' + '\u2191\u2197\u2192\u2198\u2193\u2199\u2190\u2196'[(round(a / (PI / 4)) + 8) % 8]; } }
+    elScore.textContent = playing ? (DAILY ? 'DAILY ' + floor(runT / 60) + ':' + ('0' + floor(runT % 60)).slice(-2) + '    ' : '') + 'SCORE ' + score + '    AIR BANK ' + SAVE.bank.toFixed(0) + ' s    BEST AIR ' + bestAir.toFixed(1) + ' s' + (bones ? '    BONES ' + bones : '') + lmTxt + (bigT > 0 ? '\n' + bigText : '') + (airMax > 0.4 ? '\nAIR ' + airMax.toFixed(1) + ' s' + (abs(B.rot) > 5 ? '   FLIP ' + floor(abs(B.rot) / TAU + 0.2) : '') : '') + (B.wing > 0.3 && B.air > 0.5 ? '\nCLIMB ' + (B.vy >= 0 ? '+' : '') + B.vy.toFixed(1) + ' m/s' + (B.lift > 0.8 ? '   LIFT +' + B.lift.toFixed(1) : B.lift < -0.8 ? '   SINK ' + B.lift.toFixed(1) : '') : '') + (B.stl ? '\nSTALL: nose down' : '') + (B.fold > 0.3 ? '\nWING TIPS FOLDED: slow down' : '') + (B.ps > 0.5 ? '\nPOWER SLIDE' : '') + (prox >= 1 ? '\nPROXIMITY +' + round(prox) + (proxD >= 0 ? '   ' + proxD.toFixed(1) + ' m' : '') : '') : '';
     elFuelBox.className = B.bst > 0.5 ? 'x' : B.armed ? '' : 'z';
     elHud.textContent = playing ? round(B.speed * 3.6) + ' km/h   ' + (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm + (B.crash > 0 ? '   crashed   ' + RD.bones + (RD.bones > 1 ? ' bones' : ' bone') : noteT > 0 ? note : airShow > 0 ? airText : '') : '';
   }
@@ -699,4 +778,4 @@ async function bench() {
   say('avg ' + r.avg + ' ms, worst ' + r.max + ' ms'); return r;
 }
 // for debugging from the console
-window.DUNE = { bench, get score() { return score; }, rmk: RMK, wings(v) { B.wingOn = v ? 1 : 0; }, tufts: propData.tufts, counts: { rocks: PROPS[0].count, pebbles: PROPS[1].count, tufts: tuftN, blades: bladeN }, set fov(v) { dbgFov = v; }, rocks: propData.rocks, reset: resetBike, get res() { return [RW, RH]; }, loadMs: round(performance.now()), B, IN, CAM, frame, get playing() { return playing; }, set playing(v) { playing = v; }, get hour() { return hour; }, set hour(v) { hour = v; }, get pov() { return pov; }, set pov(v) { pov = v; }, set rate(v) { tRate = v; } };
+window.DUNE = { LM, SAVE, bench, get score() { return score; }, rmk: RMK, wings(v) { B.wingOn = v ? 1 : 0; }, tufts: propData.tufts, counts: { rocks: PROPS[0].count, pebbles: PROPS[1].count, tufts: tuftN, blades: bladeN }, set fov(v) { dbgFov = v; }, rocks: propData.rocks, reset: resetBike, get res() { return [RW, RH]; }, loadMs: round(performance.now()), B, IN, CAM, frame, get playing() { return playing; }, set playing(v) { playing = v; }, get hour() { return hour; }, set hour(v) { hour = v; }, get pov() { return pov; }, set pov(v) { pov = v; }, set rate(v) { tRate = v; } };

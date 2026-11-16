@@ -1,6 +1,6 @@
 # Dune Rider
 
-A dirt bike on an endless field of sand dunes, in the browser. Everything is made by code: no images, no 3D models, no sound files, no game engine. The whole game is one 103 KB `index.html`.
+A dirt bike on an endless field of sand dunes, in the browser. Everything is made by code: no images, no 3D models, no sound files, no game engine. The whole game is one 111 KB `index.html`.
 
 Built on the WebGPU groundwork of [Abyssal Garden](https://github.com/Noniv/abyssal-garden) by Maksymilian Dendura (MIT): the single-file build, the mesh helpers and the no-engine approach come from there. The underwater scene itself is still in this repository's git history (`main` branch).
 
@@ -13,6 +13,18 @@ python3 -m http.server 8765
 ```
 
 then open <http://localhost:8765>.
+
+## How you progress
+
+You start with just the bike. Air time you land cleanly is the currency.
+
+- **The kit opens as your total grows:** rocket boost at 8 s, wings at 25 s, tail fin at 60 s, second wings at 150 s.
+- **The bank is spent on upgrades** from the menu (click, or keys `1` to `5`): boost tank, wing spars, suspension, engine, paddle tyres. Three levels each, costing 20, 50 and 120 s.
+- **Five landmarks** are out there: a radio mast, a stone arch, a wrecked aeroplane, an oasis and the bones of something large. The readout points to the nearest one you have not found. Finding one pays 15 s of air; buzzing one in the air, or threading the arch, pays points. They are solid: hitting the mast, the arch or the wreck is a crash.
+- **Daily Dune:** a button on the menu grows a new world from today's date, the same for everyone, and starts a three-minute scored run. Your best for the day is kept in your browser. There is no shared leaderboard.
+- Add `?all` to the address for free play with the whole kit open.
+
+Progress is kept in your browser's storage, on that device only.
 
 ## Controls
 

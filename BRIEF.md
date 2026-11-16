@@ -435,6 +435,16 @@ Switches on by itself when the device's main pointer is coarse (`TOUCH` in math.
 
 **Checked** in the browser's phone emulation at 375 x 812 and 812 x 375: prompt, menu, gas, stick steer and weight, wings tap, no console errors. **Not checked:** any real phone, frame rate on phone hardware, iOS Safari, multi-touch with real fingers, notches.
 
+## 7r. Progression, Daily Dune, landmarks (2026-11-16, Matthew's request)
+
+**Air bank** (`SAVE` in main.js, stored as `duneSave`). Every clean landing pays its air time into a running total and a spendable bank. The total opens the kit in order (boost 8 s, wings 25, tail fin 60, second wings 150): locked kit ignores its keys, is not drawn on the bike and has no touch button. The bank buys five upgrades at three levels (20, 50, 120 s): burn time 3 to 5 s, wing-tip fold limit 2.7 to 4 g, hard-landing limit 26 to 36 m/s, engine +8% a level, loose-sand penalty down to 10%. These are `BK.burn`, `gmax`, `hard`, `P`/`Fmax`, `softK`. `?all` opens everything.
+
+**Daily Dune** (`?daily`). `WS` (days since 1970, UTC) is added to every terrain noise seed, the prop streams and the thermal layout, so the dunes, pans, ramps, landmarks and start are new each day and the same for everyone. A 180 s clock runs while riding; at zero the score stands and the day's best is kept locally. No server, so no shared leaderboard; that would need a small backend.
+
+**Landmarks** (`buildLandmarks` in props.js, placed in main.js). Mast (88 m, on ground above 82% of the highest point), arch (40 m span), wreck, oasis, bones (all on pans), at least 260 m apart and 140 m from the start, drawn with the bike pipeline at the nearest copy of the repeating world. Eight new material ids (19 to 26) weather by their height above the sand. Within 70 m counts as found (+15 s of air, or +1000 points in a daily run). In the air within the buzz radius pays 300 points, 500 for threading the arch, once per flight. Mast, arch and wreck have colliders; palms and bones do not. They cast shadows only when near the bike, because the shadow map is centred on it.
+
+**Checked** in the browser: wings and boost locked at the start with a message; four jumps banked 8.9 s and unlocked the boost; an upgrade bought with key `1` (30 s to 10 s, saved); all five landmarks drawn and two found; compass line; daily world differs from home and shows its clock. Sims unchanged (17 of 17 ramps with boost and wings, 0.1 crashes a minute). **Not checked:** a daily run reaching zero, hitting a landmark, threading the arch, the shop on a phone screen, whether the unlock pacing feels right.
+
 ## 8. Known trade-offs
 
 - **Repeat is more visible with megadunes:** each 2 km tile holds only three of them, so from the air the pattern can be spotted sooner. The fix is still a larger or blended tile.

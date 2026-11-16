@@ -6,7 +6,7 @@
 // Material ids index the palette in the bike shader.
 // ============================================================================
 const M_TYRE = 0, M_FRAME = 1, M_PLASTIC = 2, M_SEAT = 3, M_ALU = 4, M_SUIT = 5, M_WHITE = 6, M_BOOT = 7, M_STEEL = 8, M_SUIT2 = 9,
-  M_ENGINE = 10, M_PANTS = 11, M_VISOR = 12, M_LAMP = 13, M_RIM = 14, M_SPRING = 15, M_SLEEVE = 16, M_WING = 17, M_FLAME = 18;
+  M_ENGINE = 10, M_PANTS = 11, M_VISOR = 12, M_LAMP = 13, M_RIM = 14, M_SPRING = 15, M_SLEEVE = 16, M_WING = 17, M_FLAME = 18, M_LRUST = 19, M_LWHITE = 20, M_LRED = 21, M_LTRUNK = 22, M_LLEAF = 23, M_LSTONE = 24, M_LBONE = 25, M_LWATER = 26;
 // steering axis: through the steering head, down the fork to the front axle
 const HEAD = [0, 0.30, 0.42], FAX = [0, 0.900, -0.436];        // FAX points up the fork
 const AXF = [0, -BK.L, BK.a + 0.039];                          // front axle, suspension fully out

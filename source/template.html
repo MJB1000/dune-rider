@@ -89,6 +89,13 @@ button:active { transform: translateY(.1em); filter: brightness(.9); }
 .t #o { left: 50%; margin-left: -6em; bottom: 2.6em; }
 .t #j { left: calc(1.2em + env(safe-area-inset-left)); font-size: .9em; }
 @media (orientation: portrait) { .t #rot { position: absolute; inset: 0; z-index: 9; display: grid; place-content: center; padding: 2em; background: #1b1108; font-size: 1.4em; text-align: center; } }
+#dy { justify-self: center; padding: .5em 1em; font-size: .8em; background: #1b1108b3; color: #fff4e0; box-shadow: 0 0 0 2px #ffd58a55; }
+#u { max-width: 46em; padding: .7em 1em; border-radius: .7em; background: #1b1108b3; font-size: .8em; font-weight: 600; }
+#u p + p { margin-top: .5em; }
+#u button { margin: .2em; padding: .45em .7em; font: 700 1em/1.2 system-ui, sans-serif; letter-spacing: .02em; text-transform: none; background: #fff4e0; box-shadow: inset 0 -.15em #0004; }
+#u button:disabled { opacity: .45; cursor: default; transform: none; filter: none; }
+#u i { font-style: normal; opacity: .55; }
+#m { overflow: auto; }
 #q { justify-self: center; padding: .5em 1em; font-size: .8em; background: #1b1108b3; color: #fff4e0; box-shadow: 0 0 0 2px #ffd58a55; }
 #i {
   position: absolute; left: 1.2em; bottom: 1em; margin: 0; font: 800 1.6em/1 system-ui, sans-serif; letter-spacing: .04em;
@@ -104,6 +111,8 @@ button:active { transform: translateY(.1em); filter: brightness(.9); }
     <div id=l><div id=p><i id=b></i></div><p id=s>Starting…</p></div>
     <div id=g>
       <button id=d>Ride</button>
+      <button id=dy>Daily Dune</button>
+      <div id=u></div>
       <button id=q>Detail</button>
       <p id=th>Left thumb: steer. Push the stick up or down to shift your weight.<br>Right thumb: gas, brake, boost and wings. Tap wings to step through them, hold for a moment.<br>Gas and brake together in a turn slides the back out.</p>
       <div id=k>

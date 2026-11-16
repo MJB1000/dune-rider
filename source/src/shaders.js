@@ -260,13 +260,15 @@ struct BV { @builtin(position) p: vec4f, @location(0) w: vec3f, @location(1) n: 
 @fragment fn fs(i: BV) -> @location(0) vec4f {
   // albedo + gloss: 0 tyre, 1 frame, 2 plastics, 3 seat, 4 aluminium, 5 neck, 6 white plastic, 7 boots and gloves,
   // 8 steel, 9 jersey, 10 engine, 11 pants, 12 goggle lens, 13 headlamp, 14 rims, 15 shock spring
-  var pal = array<vec4f, 19>(
+  var pal = array<vec4f, 27>(
     vec4f(0.016, 0.016, 0.017, 0.06), vec4f(0.02, 0.02, 0.022, 0.6), vec4f(0.82, 0.15, 0.015, 0.8), vec4f(0.02, 0.02, 0.024, 0.1),
     vec4f(0.5, 0.5, 0.52, 0.9), vec4f(0.3, 0.2, 0.15, 0.1), vec4f(0.8, 0.8, 0.78, 0.8), vec4f(0.028, 0.028, 0.03, 0.35),
     vec4f(0.6, 0.61, 0.63, 1.1), vec4f(0.03, 0.085, 0.4, 0.06), vec4f(0.15, 0.15, 0.16, 0.5), vec4f(0.02, 0.028, 0.07, 0.06),
     vec4f(0.012, 0.013, 0.016, 2.2), vec4f(0.85, 0.83, 0.75, 0.6), vec4f(0.028, 0.028, 0.033, 0.8), vec4f(0.78, 0.76, 0.7, 0.5),
-    vec4f(0.03, 0.085, 0.4, 0.06), vec4f(0.4, 0.42, 0.45, 1.0), vec4f(1.0, 0.5, 0.1, 0.0));
-  let id = u32(clamp(i.m + 0.5, 0.0, 18.0));
+    vec4f(0.03, 0.085, 0.4, 0.06), vec4f(0.4, 0.42, 0.45, 1.0), vec4f(1.0, 0.5, 0.1, 0.0),
+    vec4f(0.28, 0.12, 0.06, 0.15), vec4f(0.72, 0.72, 0.68, 0.4), vec4f(0.6, 0.05, 0.03, 0.4), vec4f(0.2, 0.13, 0.08, 0.05),
+    vec4f(0.07, 0.2, 0.04, 0.2), vec4f(0.4, 0.28, 0.18, 0.05), vec4f(0.68, 0.64, 0.52, 0.15), vec4f(0.015, 0.1, 0.12, 2.4));
+  let id = u32(clamp(i.m + 0.5, 0.0, 26.0));
   // rocket flame: pure light, white-hot at the nozzle cooling to orange, flickering
   if (id == 18u) {
     let k = clamp(-i.l.z, 0.0, 1.0);
@@ -316,8 +318,12 @@ struct BV { @builtin(position) p: vec4f, @location(0) w: vec3f, @location(1) n: 
   if (id == 2u || id == 6u) { m = vec4f(m.rgb * (0.8 + 0.32 * vn(l.zy * 55.0 + l.x * 31.0)), m.a * (0.55 + 0.7 * vn(l.yz * 23.0 + 5.0))); }
   // dust: sand clings to everything low on the bike, and a film of it dulls the rest
   let dust = clamp(0.04 + 0.55 * smoothstep(0.0, -0.55, i.w.y - g.bike.y) + 0.16 * vn(i.w.xz * 23.0 + i.w.y * 17.0) - 0.08, 0.0, 0.8) * step(0.5, abs(f32(id) - 12.5));
-  var alb = mix(m.rgb, g.sand.rgb * 0.85, dust);
-  let gloss = m.a * (1.0 - 0.75 * dust);
+  // landmarks (19 and up) weather on their own terms: sand drifted against their feet, streaks and patches higher up
+  var dustL = clamp(0.75 - (i.w.y - hAt(i.w.xz)) * 0.5, 0.0, 0.75) + 0.3 * vn(i.w.xz * 0.9 + i.w.y * 0.6) * vn(i.w.xy * 0.21);
+  if (id == 26u) { dustL = 0.0; }
+  if (id >= 19u) { m = vec4f(m.rgb * (0.75 + 0.5 * vn(i.w.xy * 1.7 + i.w.z * 1.3)), m.a); }
+  var alb = mix(m.rgb, g.sand.rgb * 0.85, select(dust, dustL, id >= 19u));
+  let gloss = m.a * (1.0 - 0.75 * select(dust, dustL, id >= 19u));
   let L = g.sun.xyz;
   let V = normalize(g.cam.xyz - i.w);
   let sh = g.bike.w * bikeShadow(i.w + n * 0.03 + L * 0.03) * cloudLight(i.w);

@@ -3,6 +3,10 @@
 // ============================================================================
 const { sin, cos, sqrt, min, max, abs, floor, PI, pow, atan2, hypot, exp, round, tan, sign } = Math;
 const TAU = PI * 2;
+// Daily Dune: with ?daily in the address the world is grown from today's date (UTC), the same for everyone that day.
+// ?all opens the whole kit for free play.
+const QSTR = typeof location === 'object' ? location.search : '', DAILY = /[?&]daily/.test(QSTR), FREE = /[?&]all/.test(QSTR);
+const DAY = Math.floor(Date.now() / 864e5), WS = DAILY ? DAY : 0;
 let _seed = 20261115;
 const rnd = () => {
   _seed = (_seed + 0x6D2B79F5) | 0;
@@ -12,7 +16,7 @@ const rnd = () => {
 };
 const rr = (a, b) => a + (b - a) * rnd();
 // each generator system starts its own random stream, so changing one (say the grass) never reshuffles another
-const rseed = (n) => { _seed = (20261115 + Math.imul(n, 7919)) | 0; };
+const rseed = (n) => { _seed = (20261115 + Math.imul(n + WS, 7919)) | 0; };
 // Detail level: 0 high, 1 medium, 2 low. The same world with less in it. Remembered between visits; if the last
 // load never finished (it crashed the tab), this one starts a level lower.
 const keep = (k, v) => { try { localStorage[k] = v; } catch {} };
