@@ -272,7 +272,7 @@ let spX = 300, spZ = 300, spBest = 0;
 for (let z = 0; z < TILE; z += 16) { let run = 0; for (let x = 0; x < TILE * 2; x += 8) { if (panAt(x, z) > 0.98) { run += 8; if (run > spBest) { spBest = run; spX = x - run + 30; spZ = z; } } else run = 0; } }
 resetBike(spX, spZ, PI / 2);
 const CAM = { x: B.x - 7, y: B.y + 2.5, z: B.z, yaw: PI / 2 + 0.6 };
-let playing = false, tLast = performance.now(), tNow = 0, acc = 0, hudT = 0, airMax = 0, airShow = 0, airText = '', bikeSh = 1, score = 0, bestAir = 0, benching = false, benchT = 0, benchDone = null, camDrop = 0, camDropV = 0, shk = 0, finUp = 0, prox = 0, proxD = -1, bones = 0, wasBones = 0, devAcc = 0, cdAcc = 0;
+let playing = false, tLast = performance.now(), tNow = 0, acc = 0, hudT = 0, airMax = 0, airShow = 0, airText = '', bikeSh = 1, score = 0, bestAir = 0, benching = false, benchT = 0, benchDone = null, fT = -1, fW = 0, fF = 0, fTemp = 0, camDrop = 0, camDropV = 0, shk = 0, finUp = 0, prox = 0, proxD = -1, bones = 0, wasBones = 0, devAcc = 0, cdAcc = 0;
 try { bones = +localStorage.duneBones || 0; } catch {}
 try { bestAir = +localStorage.duneBestAir || 0; } catch {}
 const elScore = $('j'), elFuel = $('n'), elFuelBox = $('o'), benchF = [];
@@ -289,9 +289,12 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && playing) pause();
   else if (e.code === 'Enter' && !playing && body.className === 'm') elGo.onclick();
   else if (e.code === 'KeyR' && playing) resetBike(B.x, B.z, B.yaw);
-  else if (e.code === 'KeyF' && playing && !e.repeat && B.crash <= 0) { // first press: main wings; second: the lower pair as well; third: all away
-    if (!B.wingOn) { B.wingOn = 1; B.flapOn = 0; } else if (!B.flapOn) B.flapOn = 1; else { B.wingOn = 0; B.flapOn = 0; }
-    soundWings(B.wingOn); say(!B.wingOn ? 'wings away' : B.flapOn ? 'second wings out' : 'wings out'); }
+  else if (e.code === 'KeyF' && playing && !e.repeat && B.crash <= 0) {
+    // a tap steps through: no wings, main wings, main and lower wings, no wings. Held, it is a momentary switch:
+    // wings out for as long as it is down if they were away, away for as long as it is down if they were out.
+    fT = performance.now(); fW = B.wingOn; fF = B.flapOn; fTemp = 0;
+    if (!fW) { B.wingOn = 1; B.flapOn = 0; soundWings(1); say('wings out'); }
+  }
   else if (e.code === 'KeyM') muted = !muted;
   else if ((e.code === 'KeyZ' || e.code === 'KeyX') && playing) { B.trim = clamp(B.trim + (e.code === 'KeyZ' ? 0.012 : -0.012), -0.084, 0.108); say('trim ' + (B.trim > 0.001 ? 'nose up ' : B.trim < -0.001 ? 'nose down ' : 'level ') + abs(round(B.trim / 0.012))); }
   else if (e.code === 'KeyC') { pov = !pov; say(pov ? 'rider view' : 'chase view'); }
@@ -300,9 +303,21 @@ addEventListener('keydown', (e) => {
   else if (e.code === 'BracketLeft') hour = (hour + 23) % 24;
   if (playing && (e.code.startsWith('Arrow') || e.code === 'Space')) e.preventDefault();
 });
-addEventListener('keyup', (e) => { K[e.code] = 0; });
-addEventListener('blur', () => { for (const k in K) K[k] = 0; if (playing) pause(); });
+addEventListener('keyup', (e) => {
+  K[e.code] = 0;
+  if (e.code === 'KeyF' && fT >= 0) {
+    const held = performance.now() - fT; fT = -1;
+    if (!playing || B.crash > 0) return;
+    if (!fW) { if (held > 300) { B.wingOn = 0; B.flapOn = 0; soundWings(0); say('wings away'); } }            // was away: a hold puts them back, a tap leaves the main wings out
+    else if (fTemp) { B.wingOn = 1; B.flapOn = fF; soundWings(1); say(fF ? 'second wings out' : 'wings out'); } // was out and held: back as they were
+    else if (!fF) { B.flapOn = 1; soundWings(1); say('second wings out'); }                                     // tap with the main wings out: add the lower pair
+    else { B.wingOn = 0; B.flapOn = 0; soundWings(0); say('wings away'); }                                      // tap with both out: all away
+  }
+});
+addEventListener('blur', () => { fT = -1; for (const k in K) K[k] = 0; if (playing) pause(); });
 function readInput() {
+  // F held past a fifth of a second with the wings out: fold them for as long as it stays down
+  if (fT >= 0 && fW && !fTemp && performance.now() - fT > 220 && B.crash <= 0) { fTemp = 1; B.wingOn = 0; soundWings(0); say('wings in (hold)'); }
   let thr = K.KeyW || K.ArrowUp ? 1 : 0, brk = K.KeyS || K.ArrowDown || K.Space ? 1 : 0, st = (K.KeyD || K.ArrowRight ? 1 : 0) - (K.KeyA || K.ArrowLeft ? 1 : 0);
   const gp = navigator.getGamepads ? navigator.getGamepads()[0] : null;
   if (gp) {

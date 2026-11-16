@@ -24,7 +24,7 @@ then open <http://localhost:8765>.
 | Power slide: throttle and brake together in a turn | `W` + `S` | Both triggers |
 | Rider weight forward / back (hold back and let go to spring off a lip) | `I` `K` | Right stick |
 | Rocket boost (hold; a full bar is 3 s, refills in 15 s) | `Shift` | A button |
-| Wings out, press again for the second set, again to stow | `F` | |
+| Wings: tap for main wings, tap again to add the lower pair, tap again to stow. Hold to put them out (or in) only while held | `F` | |
 | Tail fin: swing the nose left / right in the air | `Q` `E` | Shoulder buttons |
 | Wing trim, nose up / down | `Z` `X` | |
 | Reset the bike | `R` | |
