@@ -32,11 +32,11 @@ On a phone or tablet the game switches itself to touch: a stick under the left t
 
 | | Keyboard | Gamepad |
 |---|---|---|
-| Throttle | `W` or `↑` | Right trigger |
-| Brake | `S`, `↓` or `Space` | Left trigger |
+| Throttle. Gliding with the wings out it is the elevator instead: nose down, engine shut (let go of it once after take-off first) | `W` or `↑` | Right trigger |
+| Brake. Gliding: nose up. A tap is a degree or two, a held key is all of it, and it stops just short of the stall | `S`, `↓` or `Space` | Left trigger |
 | Steer | `A` `D` or `←` `→` | Left stick |
-| Power slide: throttle and brake together in a turn | `W` + `S` | Both triggers |
-| Rider weight forward / back (hold back and let go to spring off a lip; in the air it tips the nose down / up to line up a landing) | `I` `K` | Right stick |
+| Power slide: throttle and brake together in a turn. Gliding, the same two keys open the air brake: steep descent without gaining speed | `W` + `S` | Both triggers |
+| Rider weight forward / back (hold back and let go to spring off a lip; in the air it tips the nose down / up to line up a landing; gliding it is the fine pitch control, a few degrees either way, and back with `S` held takes the wings past the stall) | `I` `K` | Right stick |
 | Rocket boost (hold; a full bar is 3 s, refills in 15 s) | `Shift` | A button |
 | Wings: tap for main wings, tap again to add the lower pair, tap again to stow. With the wings out, hold to pull them in and dive; let go to spread them | `F` | |
 | Tail fin: swing the nose left / right in the air | `Q` `E` | Shoulder buttons |

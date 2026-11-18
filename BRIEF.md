@@ -479,3 +479,15 @@ Asked for: the ability to fine-tune a landing and be rewarded for hitting a slop
 - **Rerun:** stress 0 NaN, 7 crashes (0.2/min, was 0.1), 11 stuck events (was 13). Turning the sand changes off one by one left the crash count at 8 to 9, so the rise comes from the random pilot meeting the tabletops, not from the sand. Megadune ramps 15 / 13 / 17 of 17 landed (was 13 / 6 / 17). Falcon and burn tables rerun with the dive on `IN.tuck`.
 - **Checked in the browser:** W held in a glide leaves the wings spread; F held tucks them and F released spreads them; the landing readout and the "heavy landing, nose low" grade appear; no console errors.
 - **Not checked:** a perfect landing by hand, the buried and rough-air readouts by eye, whether 450 m feels "far greater" or just unflyable, thermal climbing with the new air by hand, touch (the WINGS button sends the same key, so a hold should dive), a blind-critic look at the tabletops, frame time.
+
+## 7u. Elevator on the throttle hand, air brake, fine pitch (2026-11-18, Matthew's request)
+
+Asked for: pointing down in the air should not start the engine; better elevator on the wings; more fine-grain control without new keys or settings.
+
+- Gliding (wings out, wheels up) `W` is no longer the throttle. The engine stays shut (`B.thr` is driven to 0) and `W` pushes the nose down at half the authority of `S`. It only counts once `W` has been let go since leaving the ground (`B.pl`), so a take-off run with the throttle open does not become a dive. Without wings nothing changes: throttle in the air still revs and still flips.
+- The elevator moves slowly at first and faster the longer it is held (`B.eh`): 50 ms is about 1.4 degrees of nose, a second is about 8. It comes back at a fixed rate.
+- `S` held right back stops 0.05 rad short of the stall angle (which is lower in the high rough air), so the stick alone flies the slowest the wings can. Before this, holding `S` always ended in a stall.
+- `I` / `K` gliding are the fine pitch: 0.045 rad either way on top of the stick. `S` + `K` is the only way past the stall on purpose.
+- `W` + `S` gliding is the air brake (`B.ab`): drag coefficient +0.13, lift -20%. About 84 km/h and 6 m/s down against 95 and 2.8 hands off. HUD says AIR BRAKE.
+- Fixed in passing: the rudder line had been swallowed by a comment in 7t, so `Q` / `E` did nothing in the pushed build.
+- `node elevator.mjs` measures all of it in still air.
