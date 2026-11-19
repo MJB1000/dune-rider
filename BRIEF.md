@@ -491,3 +491,15 @@ Asked for: pointing down in the air should not start the engine; better elevator
 - `W` + `S` gliding is the air brake (`B.ab`): drag coefficient +0.13, lift -20%. About 84 km/h and 6 m/s down against 95 and 2.8 hands off. HUD says AIR BRAKE.
 - Fixed in passing: the rudder line had been swallowed by a comment in 7t, so `Q` / `E` did nothing in the pushed build.
 - `node elevator.mjs` measures all of it in still air.
+
+## 7v. The stoop: dive like a peregrine, zoom back up higher (2026-11-18, Matthew's request)
+
+Asked for: dive like a peregrine falcon, reach insane speeds, and use them for lift boosts.
+
+- Holding `F` with the wings out now leaves 12% of the wing (was 25%), tips the nose to about 69 degrees down by itself (`S` holds it 30 degrees shallower, steering yaws the dive), cuts body drag by 96%, and the rider drives it down: a quarter of a g extra along the nose, rising to six tenths with speed. This last part is not physics, it is what makes a stoop pay.
+- Speed in the stoop charges `B.sb` (0 at 108 km/h, full at 252). After the wings spread, while the charge lasts: almost no parasitic drag, 65% less induced drag, the wings take 5 g instead of 3.2 and do not fold their tips, and the elevator answers three times as hard. The charge fades over about 16 s, and in a couple of seconds once the speed is below about 150 km/h. It is gone on touching the ground.
+- Measured in still air from 694 m, hands off after letting go: 2 s stoop 155 km/h, ends 76 m lower. 4 s: 245 km/h, +12 m. 5.5 s: 310 km/h, +42 m. 7 s: 392 km/h, +55 m (uses 440 m of height). 8 s: 446 km/h, +45 m (uses 560 m).
+- So short stoops still cost height and long ones pay about 50 m. A long one from 400 m bottoms out about 25 m off the sand.
+- HUD: STOOP with the speed, "charged: let go of F to zoom", "PULL OUT NOW" when the height left is under v squared over 45, then ZOOM with the climb rate.
+- With the rocket: burn tucked then spread peaks 248 m above the start (was 47).
+- Not done: no new sound or wing-tip trails for the stoop; the stress pilot never stoops, so stoop crashes are not in its count.

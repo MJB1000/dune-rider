@@ -38,7 +38,7 @@ On a phone or tablet the game switches itself to touch: a stick under the left t
 | Power slide: throttle and brake together in a turn. Gliding, the same two keys open the air brake: steep descent without gaining speed | `W` + `S` | Both triggers |
 | Rider weight forward / back (hold back and let go to spring off a lip; in the air it tips the nose down / up to line up a landing; gliding it is the fine pitch control, a few degrees either way, and back with `S` held takes the wings past the stall) | `I` `K` | Right stick |
 | Rocket boost (hold; a full bar is 3 s, refills in 15 s) | `Shift` | A button |
-| Wings: tap for main wings, tap again to add the lower pair, tap again to stow. With the wings out, hold to pull them in and dive; let go to spread them | `F` | |
+| Wings: tap for main wings, tap again to add the lower pair, tap again to stow. With the wings out, hold to pull them in and stoop like a falcon (nose seventy degrees down, 250 km/h in four seconds, close to 400 in seven; `S` holds the dive shallower, steering swings it round); let go to spread them and the speed comes back as a zoom climb that tops out higher than the dive began | `F` | |
 | Tail fin: swing the nose left / right in the air | `Q` `E` | Shoulder buttons |
 | Wing trim, nose up / down | `Z` `X` | |
 | Reset the bike | `R` | |
