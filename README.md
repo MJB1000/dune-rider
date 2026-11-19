@@ -50,6 +50,15 @@ On a phone or tablet the game switches itself to touch: a stick under the left t
 
 In the air the throttle lifts the nose and the brake drops it, like a real bike. With the wings out it flies like a falcon: hold `F` to pull the wings in and stoop for speed, let go to spread them and turn the speed into lift, brake to pull up and flare, steer to bank. Every stoop costs a little height. Time in the air scores 100 points a second if you land it.
 
+Tricks. Each one is called on screen as you do it and goes into a pot that a landing banks and a crash loses, the same as air time.
+
+- **Barrel roll** (300): wings out, double tap left or right. Once round in under a second; it costs a few metres.
+- **Loop** (600): wings out, stoop for at least 4 seconds (about 200 km/h), let go of `F` and hold `S` all the way over the top. It is a big, slow loop, 12 to 14 seconds and about 180 m tall. From a shorter stoop the bike runs out of speed on the way up.
+- **360** (400): wings away and at least 2.5 m up, double tap left or right. One flat turn takes about a second, then the bike swings back to face the way it is going.
+- **Superman** (250 a second): wings away, hold `Q` and `E` together (both shoulder buttons). The rider lets go of the pegs and trails out behind the bars. Let go about half a second before you land: touch down still stretched out and it is a crash.
+
+In the rider's view the camera now goes all the way round with the bike in a loop or a flip.
+
 Flips: with the wings away and more than about 5 m of air under you, let go of throttle and brake, then hold throttle to go over backward or brake to go over forward. One turn takes about 1.2 seconds; let go and the rider levels the bike. Each flip you land is worth 500 points. Throttle held from the ground does not start a flip.
 
 The air moves. A steady wind is pushed up the windward faces of the dunes and sinks behind them, and by day columns of warm air rise off the sand, each marked by a dust devil. They are common (about two squares in three have one), 90 to 150 m across, and can be felt from 10 m up. With the wings out the readout shows your climb rate and whether you are in lift or sink. The lower wings (a second press of `F`) add area: slower flight and a quarter less sink, which is what lets you circle inside a thermal and climb.

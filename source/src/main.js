@@ -312,7 +312,7 @@ const has = (i) => FREE || SAVE.total >= KIT[i][0];
 const UPG = [['Boost tank', 'longer burn'], ['Wing spars', 'tips fold later'], ['Suspension', 'harder landings'], ['Engine', 'more power'], ['Paddle tyres', 'loose sand']], COST = [20, 50, 120];
 const applyUp = () => { const u = SAVE.up; BK.burn = [3, 3.6, 4.2, 5][u[0]]; BK.gmax = [2.7, 3.1, 3.5, 4][u[1]]; BK.hard = [26, 29, 32, 36][u[2]]; BK.P = 27000 * (1 + 0.08 * u[3]); BK.Fmax = 1500 * (1 + 0.08 * u[3]); BK.softK = [1, 0.7, 0.4, 0.1][u[4]]; };
 applyUp();
-let bigT = 0, bigText = '';
+let bigT = 0, bigText = '', trick = 0, nRoll = 0, nLoop = 0, nSpin = 0, smT = 0, tapD = 0, tapT = 0, camLp = 0, pPrev = 0;
 const big = (t) => { bigText = t; bigT = 5; };
 const earn = (sec) => { const was = SAVE.total; SAVE.bank += sec; SAVE.total += sec; for (const k of KIT) if (was < k[0] && SAVE.total >= k[0] && !FREE) big('UNLOCKED: ' + k[1] + '  (' + k[2] + ')'); saveNow(); };
 const buy = (i) => { const lv = SAVE.up[i]; if (lv > 2 || SAVE.bank < COST[lv]) return; SAVE.bank -= COST[lv]; SAVE.up[i] = lv + 1; applyUp(); saveNow(); shop(); };
@@ -358,6 +358,8 @@ for (const b of document.querySelectorAll('[data-k]')) {
 }
 addEventListener('keydown', (e) => {
   K[e.code] = 1;
+  // a double tap left or right asks for a trick: a barrel roll with the wings out, a flat 360 with them away
+  if (!e.repeat && playing) { const d = e.code === 'KeyA' || e.code === 'ArrowLeft' ? -1 : e.code === 'KeyD' || e.code === 'ArrowRight' ? 1 : 0; if (d) { const n = performance.now(); if (d === tapD && n - tapT < 260) { IN.trick = d; tapT = 0; } else { tapD = d; tapT = n; } } }
   if (e.code === 'Escape' && playing) pause();
   else if (e.code === 'Enter' && !playing && body.className === 'm') elGo.onclick();
   else if (!playing && body.className === 'm' && /^Digit[1-5]$/.test(e.code)) buy(+e.code[5] - 1);
@@ -405,6 +407,7 @@ function readInput() {
   IN.lean = clamp((K.KeyI ? 1 : 0) - (K.KeyK ? 1 : 0) + (gp && abs(gp.axes[3]) > 0.2 ? -gp.axes[3] : 0) + tLean, -1, 1);
   // tail fin: Q swings the nose left, E right; the shoulder buttons on a gamepad
   IN.yaw = clamp((K.KeyE ? 1 : 0) - (K.KeyQ ? 1 : 0) + (gp ? (gp.buttons[5] && gp.buttons[5].pressed ? 1 : 0) - (gp.buttons[4] && gp.buttons[4].pressed ? 1 : 0) : 0), -1, 1);
+  IN.grab = (K.KeyQ && K.KeyE) || (gp && gp.buttons[4] && gp.buttons[4].pressed && gp.buttons[5] && gp.buttons[5].pressed) ? 1 : 0; // both fin keys: superman
   IN.boost = has(0) && (K.ShiftLeft || K.ShiftRight || (gp && gp.buttons[0] && gp.buttons[0].pressed)) ? 1 : 0;
   if (!has(2)) IN.yaw = 0;
   if (benching) {
@@ -467,7 +470,7 @@ function frame(now) {
   const sy = sin(B.yaw), cy = cos(B.yaw), sp = sin(B.pitch), cp = cos(B.pitch);
   const fX = sy * cp, fY = sp, fZ = cy * cp, uX = -sy * sp, uY = cp, uZ = -cy * sp, rX = cy, rZ = -sy;
   // lean about the tyre contact line; lying on its side after a crash
-  const ln = B.crash > 0 ? 1.35 * min(1, B.ct * 5) * (B.lean < 0 ? -1 : 1) : B.lean, cl = cos(ln), sl = sin(ln), hc = 0.67;
+  const ln = B.crash > 0 ? 1.35 * min(1, B.ct * 5) * (B.lean < 0 ? -1 : 1) : B.lean + B.roll, cl = cos(ln), sl = sin(ln), hc = 0.67;
   const u2X = uX * cl + rX * sl, u2Y = uY * cl, u2Z = uZ * cl + rZ * sl, r2X = rX * cl - uX * sl, r2Y = -uY * sl, r2Z = rZ * cl - uZ * sl;
   mBasis(MB, r2X, r2Y, r2Z, u2X, u2Y, u2Z, fX, fY, fZ, B.x + hc * (u2X - uX), B.y + hc * (u2Y - uY), B.z + hc * (u2Z - uZ));
   pChassis.mat.set(MB);
@@ -475,7 +478,7 @@ function frame(now) {
   // ---- wings. Each side unfolds in order: the root section flips up and out from the front of the bike, then the
   // middle and tip sections open like a folding rule. The tail fins swing up off the rear fender.
   {
-    const wg = B.wing, e1 = sstep(0, 0.5, wg), e2 = sstep(0.28, 0.68, wg), e3 = sstep(0.35, 0.8, wg), e4 = sstep(0.55, 1, wg) * (1 - 0.93 * B.fold); // (overloaded, the tip sections fold back)
+    const wg = max(0, B.wing - 0.12 * B.tk), e1 = sstep(0, 0.5, wg), e2 = sstep(0.28, 0.68, wg), e3 = sstep(0.35, 0.8, wg), e4 = sstep(0.55, 1, wg) * (1 - 0.93 * B.fold); // (overloaded, the tip sections fold back)
     for (let k = 0; k < 2; k++) {
       const sd = k ? -1 : 1, W = WINGS[k];
       // root section: stowed it hangs beside the front wheel like a leg shield; it flips up and out from a hinge on
@@ -521,7 +524,9 @@ function frame(now) {
   if (min(B.land, 1) > rCrouch) rCrouch = min(B.land, 1);
   if (B.pre * 0.8 > rCrouch) rCrouch = B.pre * 0.8; // winding up for a jump
   rCrouch *= exp(-dt * 3.2);
-  let RB = MB, pY = 0.44 + 0.13 * rStand - 0.11 * rCrouch, pZ = -0.31 + 0.11 * rStand - 0.13 * rBack, phi = 0.74 - 0.2 * rStand + 0.15 * rBack + 0.12 * rCrouch, rl = -ln * 0.4;
+  let RB = MB, pY = 0.44 + 0.13 * rStand - 0.11 * rCrouch, pZ = -0.31 + 0.11 * rStand - 0.13 * rBack, phi = 0.74 - 0.2 * rStand + 0.15 * rBack + 0.12 * rCrouch, rl = -(ln - B.roll) * 0.4;
+  // superman: hands on the bars, everything else trailing out flat behind them
+  if (B.sm > 0) { pY = mix(pY, 0.74, B.sm); pZ = mix(pZ, -0.41, B.sm); phi = mix(phi, 1.3, B.sm); }
   if (crashed) {
     // thrown clear and tumbling head over heels along the way he is going
     const ry = sin(RD.yaw), rc = cos(RD.yaw), ca = cos(RD.a), sa = sin(RD.a), Ux = ry * ca, Uy = sa, Uz = rc * ca, Fx = ry * sa, Fy = -ca, Fz = rc * sa;
@@ -545,6 +550,7 @@ function frame(now) {
     seg(L ? pUarmL : pUarmR, RB, shx, shy, shz, JT[0], JT[1], JT[2]); seg(L ? pArmL : pArmR, RB, JT[0], JT[1], JT[2], hx, hy, hz);
     const hpx = tx0 * 0.115 * sd, hpy = pY + ty0 * 0.115 * sd, hpz = pZ + tz0 * 0.115 * sd;
     let ax = sd * 0.205, ay = -0.2, az = -0.09;
+    if (B.sm > 0 && !crashed) { ax = mix(ax, sd * 0.16, B.sm); ay = mix(ay, pY + 0.28, B.sm); az = mix(az, pZ - 0.83, B.sm); }
     if (crashed) { ax = hpx + sd * 0.06; ay = hpy - 0.82 + 0.22 * fl * (1 + sin(RD.a * 1.9 + sd)); az = hpz + 0.08 + 0.2 * fl * sin(RD.a * 1.1 + sd * 2); }
     // knees forward, gripping the bike
     ik(hpx, hpy, hpz, ax, ay, az, 0.47, 0.42, sd * 0.28, 0.35, 1);
@@ -650,19 +656,23 @@ function frame(now) {
   const floorY = heightAt(CAM.x, CAM.z) + 0.7; if (CAM.y < floorY) CAM.y = floorY;
   // the rider's eyes when riding; the chase camera for the menu, crashes and chase view
   const fp = pov && playing && B.crash <= 0;
-  let ex = CAM.x, ey = CAM.y + camDrop * 1.6, ez = CAM.z, vx, vy, vz, roll = 0, l;
+  let ex = CAM.x, ey = CAM.y + camDrop * 1.6, ez = CAM.z, vx, vy, vz, roll = 0, l, inv = 1;
   if (fp) {
     const e1 = EYE[1] + 0.09 * rStand - 0.08 * rCrouch, e2 = EYE[2] + 0.06 * rStand - 0.07 * rBack; // the view rises and shifts with the rider
     ex = MB[0] * EYE[0] + MB[4] * e1 + MB[8] * e2 + MB[12]; ey = MB[1] * EYE[0] + MB[5] * e1 + MB[9] * e2 + MB[13] + camDrop * 0.55; ez = MB[2] * EYE[0] + MB[6] * e1 + MB[10] * e2 + MB[14];
     // the head stays more level than the bike, rolls with part of the lean and looks into the turn
-    camPitch += (B.pitch * 0.55 - 0.26 - camPitch) * (1 - exp(-dt * 7)); camRoll += (ln * 0.62 - camRoll) * (1 - exp(-dt * 9));
+    // Past about eighty degrees (a loop, a flip) the head goes with the bike all the way round instead.
+    camLp += clamp((B.air > 0 && abs(B.pitch) > 1.35 ? 1 : 0) - camLp, -dt * 5, dt * 5);
+    const pf = 0.55 + 0.45 * camLp, dpw = B.pitch - pPrev; if (abs(dpw) > PI) camPitch += (dpw > 0 ? 1 : -1) * TAU * pf;
+    camPitch += (B.pitch * pf - 0.26 * (1 - camLp) - camPitch) * (1 - exp(-dt * 7)); camRoll += ((ln - B.roll) * 0.62 - camRoll) * (1 - exp(-dt * 9));
     const yw = B.yaw + clamp(B.r * 0.1, -0.25, 0.25) + B.steer * 0.25, cpp = camPitch + camDrop * 0.45 + shk * 0.014 * sin(tNow * 67), cq = cos(cpp);
-    vx = sin(yw) * cq; vy = sin(cpp); vz = cos(yw) * cq; roll = camRoll + shk * 0.02 * sin(tNow * 53);
+    vx = sin(yw) * cq; vy = sin(cpp); vz = cos(yw) * cq; roll = camRoll + B.roll + shk * 0.02 * sin(tNow * 53); if (cq < 0) inv = -1;
   } else {
     const ld = cr ? 0 : 2.5; vx = tgX + cyS * ld - CAM.x; vy = tgY + 0.55 - CAM.y; vz = tgZ + cyC * ld - CAM.z; l = 1 / hypot(vx, vy, vz); vx *= l; vy *= l; vz *= l;
-    camPitch = B.pitch * 0.55 - 0.26; camRoll = 0;
+    camPitch = B.pitch * 0.55 - 0.26; camRoll = 0; camLp = 0;
   }
-  l = 1 / hypot(vx, vz); const fhx = vx * l, fhz = vz * l, r0x = vz * l, r0z = -vx * l, u0x = vy * r0z, u0y = vz * r0x - vx * r0z, u0z = -vy * r0x;
+  pPrev = B.pitch;
+  l = 1 / hypot(vx, vz); const fhx = vx * l, fhz = vz * l, r0x = vz * l * inv, r0z = -vx * l * inv, u0x = vy * r0z, u0y = vz * r0x - vx * r0z, u0z = -vy * r0x;
   const cro = cos(roll), sro = sin(roll), cRx = r0x * cro - u0x * sro, cRy = -u0y * sro, cRz = r0z * cro - u0z * sro, cUx = u0x * cro + r0x * sro, cUy = u0y * cro, cUz = u0z * cro + r0z * sro;
   const fov = dbgFov || (fp ? 1.45 : 0.98) + min(B.speed, 40) * 0.0075 + B.bst * 0.1 + shk * 0.05, ty = tan(fov / 2), tx = ty * RW / RH, sX = 1 / tx, sY = 1 / ty, NEAR = fp ? 0.06 : 0.15;
   const cdR = ex * cRx + ey * cRy + ez * cRz, cdU = ex * cUx + ey * cUy + ez * cUz, cdF = ex * vx + ey * vy + ez * vz;
@@ -740,12 +750,17 @@ function frame(now) {
   // like air time they are banked by a clean landing and lost in a crash
   proxD = -1;
   if (B.air > 1.2 && B.wing > 0.5 && B.crash <= 0 && B.speed > 14) { groundNormal(B.x, B.z); const d = max(0, (B.y - heightAt(B.x, B.z) - 0.7) * _gn[1]); if (d < 12) { proxD = d; prox += (1 - d / 12) * (1 - d / 12) * B.speed * 9 * dt; } }
-  if (B.crash > 0) { wasBones = RD.bones; if (airMax > 0.5) { airText = '   lost ' + airMax.toFixed(1) + ' s'; airShow = 2.5; } airMax = 0; B.flips = 0; prox = 0; }
+  // tricks: each is called as it is done and added to a pot that a landing banks and a crash loses, like the air time
+  if (B.rolls > nRoll) { trick += 300; big('BARREL ROLL  +300'); } nRoll = B.rolls;
+  if (B.loops > nLoop) { trick += 600; big('LOOP  +600'); } nLoop = B.loops;
+  if (B.spins > nSpin) { trick += 400; big('360  +400'); } nSpin = B.spins;
+  if (B.sm > 0.8 && B.crash <= 0) smT += dt; else if (smT > 0 && B.sm < 0.2) { if (B.crash <= 0 && smT > 0.3) { const p = round(smT * 250); trick += p; big('SUPERMAN ' + smT.toFixed(1) + ' s  +' + p); } smT = 0; }
+  if (B.crash > 0) { trick = 0; wasBones = RD.bones; if (airMax > 0.5) { airText = '   lost ' + airMax.toFixed(1) + ' s'; airShow = 2.5; } airMax = 0; B.flips = 0; prox = 0; }
   else if (wasBones) { bones += wasBones; keep('duneBones', '' + bones); airText = '   ' + wasBones + (wasBones > 1 ? ' bones broken' : ' bone broken') + ', thrown ' + round(RD.dist) + ' m'; airShow = 3.5; wasBones = 0; }
   else if (B.air > 0) airMax = B.air;
   else if (airMax > 0) {
-    if (airMax > 0.5) { const nf = abs(B.flips), pp = round(prox), lq = B.lq, pts = round((round(airMax * 100) + 500 * nf + pp) * (lq === 3 ? 1.5 : 1)); score += pts; earn(airMax + (lq === 3 ? 1 : 0)); if (lq === 3) big('PERFECT LANDING  x1.5  +1 s of air'); airText = '   +' + pts + '   air +' + airMax.toFixed(1) + ' s' + (lq === 3 ? '   perfect landing' : lq === 2 ? '   clean landing' : lq === 1 ? '   heavy landing' + (abs(B.lrel) > 0.16 ? (B.lrel > 0 ? ', nose high' : ', nose low') : '') : '') + (pp ? '   proximity ' + pp : '') + (nf ? '   ' + (nf > 1 ? nf + ' x ' : '') + (B.flips > 0 ? 'backflip' : 'front flip') : ''); airShow = 3; if (airMax > bestAir) { bestAir = airMax; keep('duneBestAir', bestAir.toFixed(2)); } }
-    airMax = 0; B.flips = 0; prox = 0;
+    if (airMax > 0.5) { const nf = abs(B.flips), pp = round(prox), lq = B.lq, pts = round((round(airMax * 100) + 500 * nf + pp + trick) * (lq === 3 ? 1.5 : 1)); score += pts; earn(airMax + (lq === 3 ? 1 : 0)); if (lq === 3) big('PERFECT LANDING  x1.5  +1 s of air'); airText = '   +' + pts + '   air +' + airMax.toFixed(1) + ' s' + (lq === 3 ? '   perfect landing' : lq === 2 ? '   clean landing' : lq === 1 ? '   heavy landing' + (abs(B.lrel) > 0.16 ? (B.lrel > 0 ? ', nose high' : ', nose low') : '') : '') + (pp ? '   proximity ' + pp : '') + (trick ? '   tricks ' + trick : '') + (nf ? '   ' + (nf > 1 ? nf + ' x ' : '') + (B.flips > 0 ? 'backflip' : 'front flip') : ''); airShow = 3; if (airMax > bestAir) { bestAir = airMax; keep('duneBestAir', bestAir.toFixed(2)); } }
+    airMax = 0; B.flips = 0; prox = 0; trick = 0;
   }
   elFuel.style.transform = 'scaleX(' + B.fuel.toFixed(3) + ')';
   // the daily run's clock; when it runs out the score stands and the best for the day is kept
@@ -767,7 +782,7 @@ function frame(now) {
         landTxt = '\nLANDING  slope ' + round(sl * 57.3) + ' deg   ' + (abs(d) <= 9 ? 'LINED UP' : d > 0 ? 'nose ' + d + ' deg high (I)' : 'nose ' + -d + ' deg low (K)');
       }
     }
-    elScore.textContent = playing ? (DAILY ? 'DAILY ' + floor(runT / 60) + ':' + ('0' + floor(runT % 60)).slice(-2) + '    ' : '') + 'SCORE ' + score + '    AIR BANK ' + SAVE.bank.toFixed(0) + ' s    BEST AIR ' + bestAir.toFixed(1) + ' s' + (bones ? '    BONES ' + bones : '') + lmTxt + (bigT > 0 ? '\n' + bigText : '') + (airMax > 0.4 ? '\nAIR ' + airMax.toFixed(1) + ' s' + (abs(B.rot) > 5 ? '   FLIP ' + floor(abs(B.rot) / TAU + 0.2) : '') : '') + (B.wing > 0.3 && B.air > 0.5 ? '\nCLIMB ' + (B.vy >= 0 ? '+' : '') + B.vy.toFixed(1) + ' m/s' + (B.lift > 0.8 ? '   LIFT +' + B.lift.toFixed(1) : B.lift < -0.8 ? '   SINK ' + B.lift.toFixed(1) : '') : '') + landTxt + (B.bury > 0.25 ? '\nBURIED: throttle to dig out' : B.soft > 0.5 && B.air === 0 ? '\nSOFT SAND' : '') + (B.ab > 0.5 ? '\nAIR BRAKE' : '') + (B.tk > 0.5 && B.air > 0 ? '\nSTOOP ' + round(B.speed * 3.6) + ' km/h' + (B.y - heightAt(B.x, B.z) < B.speed * B.speed / 45 ? '   PULL OUT NOW: let go of F' : B.sb > 0.6 ? '   charged: let go of F to zoom' : '') : B.sb > 0.1 && B.wing > 0.5 ? '\nZOOM' + (B.vy > 1 ? ' +' + round(B.vy) + ' m/s' : ': pull up (S)') : '') + (B.hi > 0.15 && B.wing > 0.3 ? '\nROUGH AIR' + (B.hi > 0.6 ? ': too high, the wings will let go' : '') : '') + (B.stl ? '\nSTALL: nose down' : '') + (B.fold > 0.3 ? '\nWING TIPS FOLDED: slow down' : '') + (B.ps > 0.5 ? '\nPOWER SLIDE' : '') + (prox >= 1 ? '\nPROXIMITY +' + round(prox) + (proxD >= 0 ? '   ' + proxD.toFixed(1) + ' m' : '') : '') : '';
+    elScore.textContent = playing ? (DAILY ? 'DAILY ' + floor(runT / 60) + ':' + ('0' + floor(runT % 60)).slice(-2) + '    ' : '') + 'SCORE ' + score + '    AIR BANK ' + SAVE.bank.toFixed(0) + ' s    BEST AIR ' + bestAir.toFixed(1) + ' s' + (bones ? '    BONES ' + bones : '') + lmTxt + (bigT > 0 ? '\n' + bigText : '') + (airMax > 0.4 ? '\nAIR ' + airMax.toFixed(1) + ' s' + (abs(B.rot) > 5 ? '   FLIP ' + floor(abs(B.rot) / TAU + 0.2) : '') + (trick ? '   TRICKS ' + trick : '') + (B.sm > 0.8 ? '   SUPERMAN: let go before you land' : '') : '') + (B.wing > 0.3 && B.air > 0.5 ? '\nCLIMB ' + (B.vy >= 0 ? '+' : '') + B.vy.toFixed(1) + ' m/s' + (B.lift > 0.8 ? '   LIFT +' + B.lift.toFixed(1) : B.lift < -0.8 ? '   SINK ' + B.lift.toFixed(1) : '') : '') + landTxt + (B.bury > 0.25 ? '\nBURIED: throttle to dig out' : B.soft > 0.5 && B.air === 0 ? '\nSOFT SAND' : '') + (B.ab > 0.5 ? '\nAIR BRAKE' : '') + (B.tk > 0.5 && B.air > 0 ? '\nSTOOP ' + round(B.speed * 3.6) + ' km/h' + (B.y - heightAt(B.x, B.z) < B.speed * B.speed / 45 ? '   PULL OUT NOW: let go of F' : B.sb > 0.6 ? '   charged: let go of F to zoom' : '') : B.sb > 0.1 && B.wing > 0.5 ? '\nZOOM' + (B.vy > 1 ? ' +' + round(B.vy) + ' m/s' : ': pull up (S)') : '') + (B.hi > 0.15 && B.wing > 0.3 ? '\nROUGH AIR' + (B.hi > 0.6 ? ': too high, the wings will let go' : '') : '') + (B.stl ? '\nSTALL: nose down' : '') + (B.fold > 0.3 ? '\nWING TIPS FOLDED: slow down' : '') + (B.ps > 0.5 ? '\nPOWER SLIDE' : '') + (prox >= 1 ? '\nPROXIMITY +' + round(prox) + (proxD >= 0 ? '   ' + proxD.toFixed(1) + ' m' : '') : '') : '';
     elFuelBox.className = B.bst > 0.5 ? 'x' : B.armed ? '' : 'z';
     elHud.textContent = playing ? round(B.speed * 3.6) + ' km/h   ' + (hh < 10 ? '0' : '') + hh + ':' + (mm < 10 ? '0' : '') + mm + (B.crash > 0 ? '   crashed   ' + RD.bones + (RD.bones > 1 ? ' bones' : ' bone') : noteT > 0 ? note : airShow > 0 ? airText : '') : '';
   }

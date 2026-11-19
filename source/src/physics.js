@@ -24,16 +24,18 @@ const B = {
   ct: 0, lift: 0, flap: 0, flapOn: 0, // time since the crash began, rising air under the wings (m/s), lower wings out 0..1 and asked for
   lq: 0, lrel: 0, bury: 0, hi: 0, pl: 0, eh: 0, ab: 0, sb: 0, sv: 0, // (pl: throttle let go once while gliding, so it is now the elevator; eh: how long the elevator has been held; ab: air brake)
   // how the last landing went (0 none, 1 heavy, 2 clean, 3 perfect), nose above the slope when it touched (rad), how deep the wheels are buried, how far into the rough high air
+  roll: 0, rd: 0, rolls: 0, lrot: 0, loops: 0, sp: 0, spins: 0, sm: 0, // tricks: barrel roll angle and direction, rolls done, pitch turned through on the wings, loops done, spin left to turn, spins done, superman 0..1
   wy: 0, yh: 0, rot: 0, flips: 0, free: 0, imp: 0, bog: 0, // rudder, heading hold, pitch turned through this airtime, flips landed, flip armed, impact speed, landing bog
 };
 // input: throttle 0..1, brake 0..1, steer -1..1
-const IN = { thr: 0, brk: 0, steer: 0, boost: 0, yaw: 0, lean: 0, tuck: 0 }; // tuck: wings pulled in for a dive (F held); // lean: rider's weight, +1 forward, -1 back
+const IN = { thr: 0, brk: 0, steer: 0, boost: 0, yaw: 0, lean: 0, tuck: 0, trick: 0, grab: 0 }; // trick: a double tap left or right (-1, 1), taken once; grab: both fin keys held // tuck: wings pulled in for a dive (F held); // lean: rider's weight, +1 forward, -1 back
 
 function resetBike(x, z, yaw) {
   B.x = x; B.z = z; B.y = heightAt(x, z) + BK.L + BK.Rr + 0.05; B.vx = B.vy = B.vz = 0; B.yaw = yaw; B.pitch = 0; B.q = B.r = 0;
   B.lean = B.steer = 0; B.cF = B.cR = 0; B.wR = 0; B.crash = 0; B.air = 0; B.land = 0; B.cut = 0; B.hard = 0; B.wing = 0; B.wingOn = 0; B.fuel = 1; B.bst = 0; B.armed = 1; B.wp = 0; B.wr = 0; B.wdep = 0; B.tk = 0; B.sf = 0;
   B.ct = 0; B.lift = 0; B.flap = 0; B.flapOn = 0; B.ps = 0; B.pre = 0; B.soft = 0; B.stl = 0; B.ovl = 0; B.folded = 0; B.fold = 0; B.ft = 0; B.turb = 0; B.ge = 0;
   B.wy = 0; B.yh = 0; B.rot = 0; B.flips = 0; B.free = 0; B.imp = 0; B.bog = 0; B.lq = 0; B.lrel = 0; B.bury = 0; B.hi = 0; B.pl = 0; B.eh = 0; B.ab = 0; B.sb = 0; B.sv = 0;
+  B.roll = 0; B.rd = 0; B.rolls = 0; B.lrot = 0; B.loops = 0; B.sp = 0; B.spins = 0; B.sm = 0; IN.trick = 0;
 }
 
 // ---- the air itself. A steady wind blows toward +x: it is pushed up the windward faces of the dunes (ridge lift) and
@@ -216,12 +218,21 @@ function stepBike(dt) {
     if (B.air === 0 && IN.lean > 0 && B.vy > 1) B.vy *= 1 - 0.28 * IN.lean;
     B.pre = 0;
     _tp += mix(B.thr * 1.0 - IN.brk * 1.8 - IN.lean * 0.8 + dp * 3.5 - B.q * 2.2, inp ? (inp * 5.5 - B.q) * 7 : (dp - IN.lean * 0.4) * 14 - B.q * 6, fl) * k.Ip * (1 - B.wing);
-    B.rot += B.q * dt;
+    B.rot += B.q * dt * (1 - B.wing); // (turning over on the wings is a loop, counted further down, not a flip)
     // steering whips the bike round in the air; hands off, it swings back to face the way it is travelling, ready to land.
     // The tail fin (Q and E) turns it flat and slowly, like a helicopter's pedals, and the heading it is left on is held for a moment.
     let ya = Math.atan2(B.vx, B.vz) - B.yaw; ya -= round(ya / TAU) * TAU;
     if (abs(B.wy) > 0.05) B.yh = 1; else B.yh = max(0, B.yh - dt * 0.7);
-    _ty += (IN.steer * 1.5 + B.wy * 1.1 - B.r * 1.2 + (hypot(B.vx, B.vz) > 4 ? clamp(ya, -0.6, 0.6) * 3 * (1 - abs(IN.steer)) * (1 - B.yh) : 0)) * k.Iy * (1 - B.wing);
+    // A double tap left or right with the wings away throws the bike round one whole flat turn, about a second of it.
+    if (B.sp) { const d = B.sp > 0 ? 1 : -1; _ty += (d * 6.5 - B.r) * 9 * k.Iy * (1 - B.wing); B.sp -= B.r * dt; if (B.sp * d <= 0.35) { B.sp = 0; B.spins++; } if (B.wdep > 0.5) B.sp = 0; }
+    else _ty += (IN.steer * 1.5 + B.wy * 1.1 - B.r * 1.2 + (hypot(B.vx, B.vz) > 4 ? clamp(ya, -0.6, 0.6) * 3 * (1 - abs(IN.steer)) * (1 - B.yh) : 0)) * k.Iy * (1 - B.wing);
+    // tricks are asked for with a double tap: a barrel roll on the wings, a flat spin without them
+    if (IN.trick && B.air > 0.3) { if (B.wdep > 0.5) { if (!B.rd) B.rd = IN.trick; } else if (!B.sp && B.y - heightAt(B.x, B.z) > 2.5) B.sp = IN.trick * TAU; }
+    IN.trick = 0;
+    // the barrel roll: once round in a little under a second, and for that second the wings lift whichever way they point
+    if (B.rd) { B.roll += B.rd * TAU / 0.85 * dt * (0.55 + 0.9 * sin(min(abs(B.roll), TAU) / 2)); if (abs(B.roll) >= TAU) { B.roll = 0; B.rd = 0; B.rolls++; } if (B.wdep < 0.5) { B.roll = 0; B.rd = 0; } }
+    // superman: both fin keys held with the wings away, he lets go of the pegs and trails out flat behind the bars. Land like that and it is a crash.
+    B.sm += clamp((IN.grab && B.wdep < 0.5 && B.air > 0.25 ? 1 : 0) - B.sm, -dt * 3.5, dt * 4);
     B.air += dt; B.cut = 0;
   } else {
     // touchdown: how hard it hit sets the thump, the dust and the bog. The sand takes a bite out of the speed,
@@ -239,7 +250,8 @@ function stepBike(dt) {
       const sc = 1 - 0.06 * B.bog - 0.22 * B.bury; B.vx *= sc; B.vz *= sc;
       B.flips = floor(abs(B.rot) / TAU + 0.2) * (B.rot > 0 ? 1 : -1);
     }
-    B.air = 0; B.imp = 0; B.rot = 0; B.free = 0; B.yh = 0;
+    if (B.sm > 0.45 && B.air > 0.35) B.hard = 1; // (still off the pegs)
+    B.air = 0; B.imp = 0; B.rot = 0; B.free = 0; B.yh = 0; B.roll = 0; B.rd = 0; B.sp = 0; B.sm = 0; B.lrot = 0; IN.trick = 0;
     // the rider keeps a looping wheelie from going all the way over
     groundNormal(B.x, B.z);
     const rel = B.pitch - Math.asin(clamp(_gn[0] * -sy + _gn[2] * -cy, -1, 1)), over = rel - 0.6;
@@ -289,7 +301,7 @@ function stepBike(dt) {
     _tp += (ds * 9 - B.q * 5) * k.Ip * B.tk * B.wdep;
     _ty += (IN.steer * 0.9 - B.r * 1.5) * k.Iy * B.tk * B.wdep;
   } else { B.sb = max(0, B.sb - dt * (grounded ? 2 : B.wing > 0.8 ? 0.06 + 0.4 * (1 - sstep(30, 50, spd)) : 0)); if (B.sb === 0) B.sv = 0; } // (the charge lasts for as long as the speed does)
-  B.flap += clamp((B.flapOn ? B.wdep : 0) - B.flap, -dt * 2, dt * 2); // the lower pair of wings
+  B.flap += clamp((B.flapOn ? B.wdep * (1 - B.tk) : 0) - B.flap, -dt * (B.tk > 0.5 ? 4 : 2), dt * (2 + 2 * B.sb)); // the lower pair of wings: they come in for a stoop with the upper pair
   B.lift = 0; B.turb = 0; B.ge = 0;
   if (B.wing <= 0.02) { B.folded = 0; B.ovl = 0; B.stl = 0; }
   B.fold += clamp(B.folded - B.fold, -dt * 2, dt * 4);
@@ -330,7 +342,7 @@ function stepBike(dt) {
     const clG = (3.2 + 1.8 * B.sb) * k.m * 9.81 / (qd * S); if (cl > clG) { cl = clG; cd = cd0 + cl * cl * ki; }
     const Lf = qd * S * cl, Df = qd * S * cd;
     // lift acts square to the flight path, tilted with the bank
-    const cb = cos(B.lean), sb = sin(B.lean); let lx = uX * cb + rX * sb, ly = uY * cb, lz = uZ * cb + rZ * sb;
+    const cb = cos(B.lean + B.roll), sb = sin(B.lean + B.roll); let lx = uX * cb + rX * sb, ly = uY * cb, lz = uZ * cb + rZ * sb;
     const dd = lx * ivx + ly * ivy + lz * ivz; lx -= ivx * dd; ly -= ivy * dd; lz -= ivz * dd; const ll = 1 / (hypot(lx, ly, lz) || 1);
     _fx += lx * ll * Lf - ivx * Df; _fy += ly * ll * Lf - ivy * Df; _fz += lz * ll * Lf - ivz * Df;
     // flying a little sideways, the fin and the bike's flank push back across the airflow: that is what turns a rudder input into a flat turn
@@ -345,7 +357,10 @@ function stepBike(dt) {
       const aT = min(0.2 + B.trim + 0.18 * B.wp, max(aS - 0.05, 0.2 + B.trim)) - 0.045 * IN.lean;
       _tp += ((aT - alpha) * 10 * (1 + 2 * B.sb) - B.q * 4.5) * k.Ip * auth - abs(B.stl) * 1.6 * k.Ip * w;
       // and the bike weathervanes to face where it is going
-      let dy = Math.atan2(B.vx, B.vz) - B.yaw; dy -= round(dy / TAU) * TAU;
+      // (over the top of a loop the bike is on its back and flying the other way, and with the nose straight up or down there is no heading to hold)
+      const inv = cos(B.pitch) < 0 ? -1 : 1; let dy = Math.atan2(B.vx * inv, B.vz * inv) - B.yaw; dy -= round(dy / TAU) * TAU; dy *= sstep(0.1, 0.4, hypot(ivx, ivz));
+      // a loop: a whole turn in pitch on the wings
+      B.lrot += B.q * dt * (w > 0.5 ? 1 : 0); if (abs(B.lrot) >= TAU) { B.lrot -= (B.lrot > 0 ? 1 : -1) * TAU; B.loops++; }
       _ty += ((dy + B.wy * 0.45) * 7 - B.r * 3.5 + _gst * 0.9) * k.Iy * auth + B.stl * 1.2 * k.Iy * w; // (the rudder holds the nose off to one side; gusts shove it about)
     } else _tp += ((0.2 + B.trim - alpha) * 60 - B.q * 8) * k.Ip * min(1, qd / 220) * w * sstep(18, 24, spd) * B.bst; // on the ground, under rocket power, the tail lifts the nose once there is speed enough to fly: a flat is a runway
   }

@@ -503,3 +503,14 @@ Asked for: dive like a peregrine falcon, reach insane speeds, and use them for l
 - HUD: STOOP with the speed, "charged: let go of F to zoom", "PULL OUT NOW" when the height left is under v squared over 45, then ZOOM with the climb rate.
 - With the rocket: burn tucked then spread peaks 248 m above the start (was 47).
 - Not done: no new sound or wing-tip trails for the stoop; the stress pilot never stoops, so stoop crashes are not in its count.
+
+## 7w. Air tricks, and both pairs of wings fold in a stoop (2026-11-19, Matthew's request)
+
+- Stoop: the lower wings now tuck with the upper pair (`B.flap` follows `1 - B.tk`), and the upper pair is drawn fully folded.
+- Double tap left/right (`IN.trick`, taken once by the physics): barrel roll with the wings out (`B.roll`, lift follows the roll), flat 360 with them away (`B.sp`).
+- Loop: a whole turn of pitch on the wings (`B.lrot`). Needs a stoop of 4 s or more. The weathervane now knows about inverted flight, and pitch turned on the wings no longer counts as a flip.
+- Superman: `Q`+`E` with the wings away (`B.sm`); landing with it above 0.45 is a crash.
+- Scoring lives in main.js: a `trick` pot banked with the air time. Roll 300, loop 600, 360 400, superman 250 a second.
+- Rider view: past about 80 degrees of pitch the camera follows the bike all the way round.
+- `node tricks.mjs` runs each trick headless.
+- Not done: tricks on touch or a gamepad stick (double tap is keyboard only), sounds for tricks.
